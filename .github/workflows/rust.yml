@@ -1,0 +1,84 @@
+name: rust
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: ツールチェーンの channel を読む
+        id: toolchain
+        shell: bash
+        run: |
+          python3 - << 'PY'
+          import os
+          import pathlib
+          import re
+
+          toml_path = pathlib.Path("rust-toolchain.toml")
+          plain_path = pathlib.Path("rust-toolchain")
+          if toml_path.is_file():
+              match = re.search(
+                  r"(?m)^\s*channel\s*=\s*[\"']?([^\"'#\s]+)",
+                  toml_path.read_text(encoding="utf-8"),
+              )
+              if match is None:
+                  raise SystemExit("rust-toolchain.toml に channel がありません")
+              channel = match.group(1)
+          elif plain_path.is_file():
+              lines = plain_path.read_text(encoding="utf-8").splitlines()
+              channel = lines[0].strip() if lines else ""
+              if channel == "":
+                  raise SystemExit("rust-toolchain の channel が空です")
+          else:
+              channel = "stable"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"channel={channel}\n")
+          PY
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: rustfmt, clippy
+
+      - name: ワークスペースの有無
+        id: workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f Cargo.toml ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Cargo.toml が無いので fmt と clippy と test は実行しません"
+          fi
+
+      - name: キャッシュ
+        if: steps.workspace.outputs.present == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        if: steps.workspace.outputs.present == 'true'
+        run: cargo fmt --check
+
+      - name: cargo clippy --all-targets -- -D warnings
+        if: steps.workspace.outputs.present == 'true'
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        if: steps.workspace.outputs.present == 'true'
+        run: cargo test
