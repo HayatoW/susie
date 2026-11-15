@@ -1,5 +1,3 @@
-name: rust
-
 on:
   pull_request:
   push:
@@ -11,14 +9,11 @@ permissions:
 
 jobs:
   rust:
-    name: rust
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
-      - name: rustfmt と clippy
-        run: rustup component add rustfmt clippy
+      - run: rustup component add rustfmt clippy
 
       - name: ワークスペースの有無
         id: workspace
@@ -32,14 +27,11 @@ jobs:
             echo "Cargo.toml が無いので fmt と clippy と test は実行しません"
           fi
 
-      - name: cargo fmt --check
-        if: steps.workspace.outputs.present == 'true'
+      - if: steps.workspace.outputs.present == 'true'
         run: cargo fmt --check
 
-      - name: cargo clippy --all-targets -- -D warnings
-        if: steps.workspace.outputs.present == 'true'
+      - if: steps.workspace.outputs.present == 'true'
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: cargo test
-        if: steps.workspace.outputs.present == 'true'
+      - if: steps.workspace.outputs.present == 'true'
         run: cargo test
