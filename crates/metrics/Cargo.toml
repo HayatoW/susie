@@ -1,0 +1,15 @@
+[package]
+name = "susie-metrics"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "起動時間と描画 fps を記録する susie 用ライブラリ"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[[bin]]
+name = "susie-metrics-simulate"
+path = "src/bin/susie-metrics-simulate.rs"
