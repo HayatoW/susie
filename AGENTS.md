@@ -1,6 +1,6 @@
 # エージェントへのルール
 
-susie で動くエージェントは、このファイルに従います。作業の前に `docs/brief.md` 、 `docs/board.md` 、 `docs/decisions/` を読みます。
+susie で動くエージェントは、このファイルに従います。作業の前に `docs/brief.md` 、 `docs/board.md` 、 `docs/adr/` を読みます。
 
 ## 表記
 
@@ -34,7 +34,7 @@ GPUI のウィンドウが開き、閉じるとプロセスが終わるように
 
 - ブリーフは `docs/brief.md` です。
 - タスクは `docs/board.md` です。
-- 決定記録は `docs/decisions/` です。
+- ADR は `docs/adr/` です。 ADR は、決定と理由を 1 件ずつ残す記録です。
 
 ## 進め方
 

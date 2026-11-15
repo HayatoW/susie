@@ -26,7 +26,7 @@ Hayato が成果物を信頼するのは、この 5 つがリポジトリにあ�
 
 ## 置き場所
 
-コードも、信頼の根拠も、 Cursor Origin のこのリポジトリ 1 つに置きます。ブリーフは `docs/brief.md` 、タスクは `docs/board.md` 、決定記録は `docs/decisions/` です。有効な決定は、 [CEF をページの中身にする](decisions/0001-cef.md) 、 [最初の OS は Linux にする](decisions/0004-linux-first.md) 、 [リポジトリは Cursor Origin に置く](decisions/0003-cursor-origin.md) です。 [最初の OS は macOS にする](decisions/0002-macos-first.md) は置き換え済みです。
+コードも、信頼の根拠も、 Cursor Origin のこのリポジトリ 1 つに置きます。ブリーフは `docs/brief.md` 、タスクは `docs/board.md` 、 ADR は `docs/adr/` です。有効な決定は、 [CEF をページの中身にする](adr/0001-cef.md) 、 [最初の OS は Linux にする](adr/0004-linux-first.md) 、 [リポジトリは Cursor Origin に置く](adr/0003-cursor-origin.md) です。 [最初の OS は macOS にする](adr/0002-macos-first.md) は置き換え済みです。
 
 ## 作るもの
 
