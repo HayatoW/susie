@@ -11,8 +11,6 @@ use cef::*;
 use crate::frame::{CpuFrame, Frame as PresentedFrame, VIEW_HEIGHT, VIEW_WIDTH};
 
 const PAINT_TIMEOUT: Duration = Duration::from_secs(90);
-const PAINT_QUIET: Duration = Duration::from_millis(200);
-const PAINT_HOLD: Duration = Duration::from_millis(500);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub enum Rendered {
@@ -59,8 +57,6 @@ struct State {
     nudged: Cell<bool>,
     closed: Cell<bool>,
     seen: Cell<(i32, i32)>,
-    first_paint: Cell<Option<Instant>>,
-    latest: RefCell<Option<(Instant, CpuFrame)>>,
     frame: RefCell<Option<CpuFrame>>,
     failure: RefCell<Option<String>>,
     browser: RefCell<Option<Browser>>,
@@ -75,8 +71,6 @@ impl State {
             nudged: Cell::new(false),
             closed: Cell::new(false),
             seen: Cell::new((0, 0)),
-            first_paint: Cell::new(None),
-            latest: RefCell::new(None),
             frame: RefCell::new(None),
             failure: RefCell::new(None),
             browser: RefCell::new(None),
@@ -193,10 +187,8 @@ fn pump_until(state: &State, limit: Duration) {
         if state.loaded.get() && !state.nudged.get() {
             nudge(state);
         }
-        commit_ready_frame(state);
         std::thread::sleep(Duration::from_millis(10));
     }
-    commit_latest_frame(state);
 }
 
 fn nudge(state: &State) {
@@ -210,37 +202,6 @@ fn nudge(state: &State) {
     host.was_resized();
     host.invalidate(PaintElementType::VIEW);
     state.nudged.set(true);
-}
-
-fn paint_is_ready(since_first: Duration, since_latest: Duration) -> bool {
-    since_latest >= PAINT_QUIET || since_first >= PAINT_HOLD
-}
-
-fn commit_ready_frame(state: &State) {
-    let ready = {
-        let latest = state.latest.borrow();
-        let Some((at, _)) = latest.as_ref() else {
-            return;
-        };
-        let Some(first) = state.first_paint.get() else {
-            return;
-        };
-        paint_is_ready(first.elapsed(), at.elapsed())
-    };
-    if !ready {
-        return;
-    }
-    commit_latest_frame(state);
-}
-
-fn commit_latest_frame(state: &State) {
-    if state.finished() {
-        return;
-    }
-    let Some((_, frame)) = state.latest.borrow_mut().take() else {
-        return;
-    };
-    *state.frame.borrow_mut() = Some(frame);
 }
 
 fn close_browser(state: &State) {
@@ -324,6 +285,27 @@ fn cef_path(path: &Path) -> Result<CefString, SessionError> {
         .to_str()
         .ok_or(SessionError::Setup("パスが UTF-8 ではありません"))?;
     Ok(CefString::from(text))
+}
+
+fn top_has_ink(bgra: &[u8], width: u32, height: u32) -> bool {
+    let width = width as usize;
+    let rows = (height as usize).min(180);
+    let columns = width.saturating_sub(24);
+    let mut dark = 0usize;
+    for y in 0..rows {
+        let row = y * width * 4;
+        for x in 0..columns {
+            let index = row + x * 4;
+            let pixel = &bgra[index..index + 4];
+            if pixel[0] < 240 || pixel[1] < 240 || pixel[2] < 240 {
+                dark += 1;
+                if dark >= 80 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn append_switches(command_line: &mut CommandLine) {
@@ -561,17 +543,14 @@ wrap_render_handler! {
             };
             // SAFETY: CEF は、この呼び出しのあいだ、バッファを BGRA の width * height * 4 バイトとして有効に保つ。
             let bytes = unsafe { std::slice::from_raw_parts(buffer, len) };
-            if width as u32 != VIEW_WIDTH || height as u32 != VIEW_HEIGHT {
+            if width as u32 != VIEW_WIDTH
+                || height as u32 != VIEW_HEIGHT
+                || !top_has_ink(bytes, width as u32, height as u32)
+            {
                 return;
             }
             match CpuFrame::copy_bgra(width as u32, height as u32, bytes) {
-                Ok(frame) => {
-                    let now = Instant::now();
-                    if self.state.first_paint.get().is_none() {
-                        self.state.first_paint.set(Some(now));
-                    }
-                    *self.state.latest.borrow_mut() = Some((now, frame));
-                }
+                Ok(frame) => *self.state.frame.borrow_mut() = Some(frame),
                 Err(err) => *self.state.failure.borrow_mut() = Some(err.to_string()),
             }
         }
@@ -581,32 +560,8 @@ wrap_render_handler! {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::{symlink, PermissionsExt};
-    use std::time::Duration;
 
-    use super::{
-        commit_latest_frame, encode_file_url, file_url, paint_is_ready, State, PAINT_HOLD,
-        PAINT_QUIET,
-    };
-    use crate::frame::CpuFrame;
-
-    #[test]
-    fn moving_paint_is_kept_after_the_hold() {
-        let still = PAINT_QUIET - Duration::from_millis(1);
-        assert!(!paint_is_ready(still, still));
-        assert!(paint_is_ready(PAINT_QUIET, PAINT_QUIET));
-        let moving = Duration::from_millis(16);
-        assert!(!paint_is_ready(PAINT_HOLD - moving, moving));
-        assert!(paint_is_ready(PAINT_HOLD, moving));
-    }
-
-    #[test]
-    fn timeout_keeps_the_latest_frame() {
-        let state = State::new();
-        let frame = CpuFrame::copy_bgra(1, 1, &[1, 2, 3, 4]).unwrap();
-        *state.latest.borrow_mut() = Some((std::time::Instant::now(), frame.clone()));
-        commit_latest_frame(&state);
-        assert_eq!(state.frame.borrow().as_ref(), Some(&frame));
-    }
+    use super::{encode_file_url, file_url};
 
     #[test]
     fn file_url_encodes_reserved_characters() {
