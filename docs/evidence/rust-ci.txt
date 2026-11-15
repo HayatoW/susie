@@ -1,0 +1,27 @@
+ワークフローは .github/workflows/rust.yml です。
+ジョブは rust の 1 つです。ランナーは ubuntu-latest です。
+
+実行: https://github.com/HayatoW/susie/actions/runs/43723119084
+ジョブ: https://github.com/HayatoW/susie/actions/runs/43723119084/job/132839172292
+イベント: pull_request
+コミット: e1e581074de5af845eef80d1a9ba4d0a37456512
+結論: success
+開始: 2026-11-15T14:12:54Z
+終了: 2026-11-15T14:13:07Z
+時間: 13 秒
+
+インストールした rustc は 1.100.0 (0ef1bc386 2026-11-09) です。 channel は stable です。
+ログには「Cargo.toml が無いので fmt と clippy と test は実行しません」と出ています。
+
+ステップ:
+- checkout は success
+- ツールチェーンの channel を読むは success
+- Rust は success
+- ワークスペースの有無は success
+- キャッシュは skipped
+- cargo fmt --check は skipped
+- cargo clippy --all-targets -- -D warnings は skipped
+- cargo test は skipped
+
+ローカルの終了コードは docs/evidence/rust-ci-local-no-manifest.txt と docs/evidence/rust-ci-local-lib.txt です。
+actionlint は docs/evidence/rust-ci-actionlint.txt です。

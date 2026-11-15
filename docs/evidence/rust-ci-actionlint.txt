@@ -1,0 +1,5 @@
+=== actionlint 1.7.12 ===
+1.7.12
+installed by downloading from release page
+built with go1.26.1 compiler for linux/amd64
+actionlint の終了コード: 0
