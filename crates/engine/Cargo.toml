@@ -1,0 +1,9 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ページを画面の外で描き、フレームとして渡す"
+
+[dependencies]
+image = { version = "0.25.8", default-features = false, features = ["png"] }
