@@ -1,0 +1,22 @@
+   Compiling susie-metrics v0.1.0 (/agent/repos/susie/crates/metrics)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (target/debug/deps/susie_metrics-24b0622fa3276f81)
+
+running 2 tests
+test tests::append_and_read_last_roundtrip ... ok
+test tests::recorder_startup_and_fps_window ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+     Running unittests src/bin/susie-metrics-simulate.rs (target/debug/deps/susie_metrics_simulate-1ee7aa5f43337cd4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests susie_metrics
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
