@@ -1,4 +1,6 @@
 use std::cell::{Cell, RefCell};
+use std::io::Read;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -278,10 +280,33 @@ fn hex_digit(nibble: u8) -> char {
 }
 
 fn cache_dir() -> Result<(PathBuf, PathBuf), SessionError> {
-    let root = std::env::temp_dir().join(format!("susie-cef-{}", std::process::id()));
+    let root = create_private_dir()?;
     let cache = root.join("cache");
-    std::fs::create_dir_all(&cache).map_err(SessionError::Io)?;
+    if let Err(err) = std::fs::create_dir(&cache) {
+        let _ = std::fs::remove_dir(&root);
+        return Err(SessionError::Io(err));
+    }
     Ok((root, cache))
+}
+
+fn create_private_dir() -> Result<PathBuf, SessionError> {
+    let mut bytes = [0u8; 16];
+    let mut random = std::fs::File::open("/dev/urandom").map_err(SessionError::Io)?;
+    random.read_exact(&mut bytes).map_err(SessionError::Io)?;
+    let mut name = String::from("susie-cef-");
+    for byte in bytes {
+        name.push(hex_digit(byte >> 4));
+        name.push(hex_digit(byte & 0x0f));
+    }
+    let root = std::env::temp_dir().join(name);
+    create_mode_700(&root).map_err(SessionError::Io)?;
+    Ok(root)
+}
+
+fn create_mode_700(path: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(path)
 }
 
 fn resource_dir() -> Result<PathBuf, SessionError> {
@@ -555,6 +580,7 @@ wrap_render_handler! {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::time::Duration;
 
     use super::{
@@ -599,5 +625,20 @@ mod tests {
         assert!(url.contains("%20"));
         assert!(url.contains("%25"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn private_dir_is_owner_only() {
+        let root = super::create_private_dir().unwrap();
+        let meta = std::fs::symlink_metadata(&root).unwrap();
+        assert!(meta.file_type().is_dir());
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+        assert!(super::create_mode_700(&root).is_err());
+
+        let link = std::env::temp_dir().join(format!("susie-link-{}", std::process::id()));
+        symlink(&root, &link).unwrap();
+        assert!(super::create_mode_700(&link).is_err());
+        std::fs::remove_file(&link).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
