@@ -26,7 +26,7 @@ Hayato が成果物を信頼するのは、この 5 つがリポジトリにあ�
 
 ## 置き場所
 
-コードも、信頼の根拠も、 Cursor Origin のこのリポジトリ 1 つに置きます。ブリーフは `docs/brief.md` 、タスクは `docs/board.md` 、決定記録は `docs/decisions/` です。決めた 3 件は、 [CEF をページの中身にする](decisions/0001-cef.md) 、 [最初の OS は macOS にする](decisions/0002-macos-first.md) 、 [リポジトリは Cursor Origin に置く](decisions/0003-cursor-origin.md) です。
+コードも、信頼の根拠も、 Cursor Origin のこのリポジトリ 1 つに置きます。ブリーフは `docs/brief.md` 、タスクは `docs/board.md` 、決定記録は `docs/decisions/` です。有効な決定は、 [CEF をページの中身にする](decisions/0001-cef.md) 、 [最初の OS は Linux にする](decisions/0004-linux-first.md) 、 [リポジトリは Cursor Origin に置く](decisions/0003-cursor-origin.md) です。 [最初の OS は macOS にする](decisions/0002-macos-first.md) は置き換え済みです。
 
 ## 作るもの
 
@@ -36,7 +36,7 @@ Hayato が成果物を信頼するのは、この 5 つがリポジトリにあ�
 
 UI はデザインの原則に従います。画面に出すものを絞り、同じ操作には同じ名前を使い、認知負荷を低くします。
 
-最初の OS は macOS です。次に Linux (Omarchy) へ進み、 Windows はその後です。
+最初の OS は Linux です。対象は、クラウドエージェントが使う Linux の VM です。次は macOS で、 Windows はその後です。 Linux の GPUI には、コピーなしで描画を取り込む公式の経路がありません。最初の表示は CPU で画素をコピーし、その性能を計測で確かめます。
 
 ## 当面やらないこと
 
@@ -68,6 +68,6 @@ UI はデザインの原則に従います。画面に出すものを絞り、�
 
 ## 最初の一歩
 
-macOS で、 CEF が描いた 1 ページを GPUI のウィンドウに表示します。そのページでスクロール、クリック、文字入力ができます。起動時間と描画の fps は、自動で記録されます。完了は、録画と、その起動で記録した数値を一緒に見せたときです。
+Linux で、 CEF が描いた 1 ページを GPUI のウィンドウに表示します。そのページでスクロール、クリック、文字入力ができます。起動時間と描画の fps は、自動で記録されます。録画は、クラウドの Linux VM 上で、人の操作なしに撮れる方法を前提にします。完了は、その録画と、その起動で記録した数値を一緒に見せたときです。
 
 タスクの分割と受け入れ条件は `docs/board.md` にあります。 IME での日本語変換は最初の一歩の外で、地図の 2 に残します。最初の一歩が `complete` になってから、小さなタスクに分けてボードへ追加します。
