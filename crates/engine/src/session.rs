@@ -1,6 +1,4 @@
 use std::cell::{Cell, RefCell};
-use std::io::Read;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -136,12 +134,12 @@ pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
 
     *state.url.borrow_mut() = file_url(fixture)?;
     let resources = resource_dir()?;
-    let (root, cache) = cache_dir()?;
+    let cache = cache_dir()?;
     let settings = Settings {
         no_sandbox: 0,
         windowless_rendering_enabled: 1,
         external_message_pump: 1,
-        root_cache_path: cef_path(&root)?,
+        root_cache_path: cef_path(&cache)?,
         cache_path: cef_path(&cache)?,
         resources_dir_path: cef_path(&resources)?,
         locales_dir_path: cef_path(&resources.join("locales"))?,
@@ -155,7 +153,6 @@ pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
         std::ptr::null_mut(),
     );
     if initialized != 1 {
-        let _ = std::fs::remove_dir_all(&root);
         return Err(SessionError::Initialize(initialized));
     }
 
@@ -168,7 +165,6 @@ pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
     }
     state.browser.borrow_mut().take();
     shutdown();
-    let _ = std::fs::remove_dir_all(&root);
 
     if let Some(frame) = state.frame.borrow_mut().take() {
         return Ok(Rendered::Frame(PresentedFrame::Cpu(frame)));
@@ -219,38 +215,10 @@ fn file_url(path: &Path) -> Result<String, SessionError> {
     Ok(format!("file://{text}"))
 }
 
-fn hex_digit(nibble: u8) -> char {
-    b"0123456789ABCDEF"[nibble as usize] as char
-}
-
-fn cache_dir() -> Result<(PathBuf, PathBuf), SessionError> {
-    let root = create_private_dir()?;
-    let cache = root.join("cache");
-    if let Err(err) = std::fs::create_dir(&cache) {
-        let _ = std::fs::remove_dir(&root);
-        return Err(SessionError::Io(err));
-    }
-    Ok((root, cache))
-}
-
-fn create_private_dir() -> Result<PathBuf, SessionError> {
-    let mut bytes = [0u8; 16];
-    let mut random = std::fs::File::open("/dev/urandom").map_err(SessionError::Io)?;
-    random.read_exact(&mut bytes).map_err(SessionError::Io)?;
-    let mut name = String::from("susie-cef-");
-    for byte in bytes {
-        name.push(hex_digit(byte >> 4));
-        name.push(hex_digit(byte & 0x0f));
-    }
-    let root = std::env::temp_dir().join(name);
-    create_mode_700(&root).map_err(SessionError::Io)?;
-    Ok(root)
-}
-
-fn create_mode_700(path: &Path) -> std::io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.mode(0o700);
-    builder.create(path)
+fn cache_dir() -> Result<PathBuf, SessionError> {
+    let path = std::env::temp_dir().join("susie-cef-cache");
+    std::fs::create_dir_all(&path).map_err(SessionError::Io)?;
+    Ok(path)
 }
 
 fn resource_dir() -> Result<PathBuf, SessionError> {
@@ -537,25 +505,5 @@ wrap_render_handler! {
                 Err(err) => *self.state.failure.borrow_mut() = Some(err.to_string()),
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::os::unix::fs::{symlink, PermissionsExt};
-
-    #[test]
-    fn private_dir_is_owner_only() {
-        let root = super::create_private_dir().unwrap();
-        let meta = std::fs::symlink_metadata(&root).unwrap();
-        assert!(meta.file_type().is_dir());
-        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
-        assert!(super::create_mode_700(&root).is_err());
-
-        let link = std::env::temp_dir().join(format!("susie-link-{}", std::process::id()));
-        symlink(&root, &link).unwrap();
-        assert!(super::create_mode_700(&link).is_err());
-        std::fs::remove_file(&link).unwrap();
-        std::fs::remove_dir_all(root).unwrap();
     }
 }
