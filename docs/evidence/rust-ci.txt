@@ -1,0 +1,28 @@
+ワークフローは .github/workflows/rust.yml です。
+ジョブは rust の 1 つです。ランナーは ubuntu-latest です。
+使う Action は actions/checkout@v7 だけです。キャッシュはありません。
+権限は contents: read です。ログの GITHUB_TOKEN は Contents: read と Metadata: read です。
+fmt と clippy と test は常に実行します。Cargo.toml の有無では分岐しません。
+
+実行: https://github.com/HayatoW/susie/actions/runs/43726387990
+ジョブ: https://github.com/HayatoW/susie/actions/runs/43726387990/job/132849123252
+イベント: pull_request
+コミット: b01279c39668a8099a80a504408258cf1dd97c17
+結論: failure
+開始: 2026-11-15T14:48:50Z
+終了: 2026-11-15T14:48:54Z
+時間: 4 秒
+
+ダウンロードした Action は actions/checkout@v7 (SHA 3d3c42e5aac5ba805825da76410c181273ba90b1) だけです。
+cargo fmt --check は、Cargo.toml が無いため終了コード 1 です。
+ログは「could not find `Cargo.toml` in `/home/runner/work/susie/susie` or any parent directory」です。
+前のステップが失敗したので、cargo clippy と cargo test は skipped です。
+
+ステップ:
+- checkout は success
+- rustup component add rustfmt clippy は success
+- cargo fmt --check は failure
+- cargo clippy --all-targets -- -D warnings は skipped
+- cargo test は skipped
+
+main の 3476935 には Cargo.toml がありません。PR #3 がルートの Cargo.toml を足します。
