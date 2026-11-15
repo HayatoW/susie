@@ -137,12 +137,12 @@ pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
 
     *state.url.borrow_mut() = file_url(fixture)?;
     let resources = resource_dir()?;
-    let cache = cache_dir()?;
+    let (root, cache) = cache_dir()?;
     let settings = Settings {
         no_sandbox: 1,
         windowless_rendering_enabled: 1,
         external_message_pump: 1,
-        root_cache_path: cef_path(&cache)?,
+        root_cache_path: cef_path(&root)?,
         cache_path: cef_path(&cache)?,
         resources_dir_path: cef_path(&resources)?,
         locales_dir_path: cef_path(&resources.join("locales"))?,
@@ -156,6 +156,7 @@ pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
         std::ptr::null_mut(),
     );
     if initialized != 1 {
+        let _ = std::fs::remove_dir_all(&root);
         return Err(SessionError::Initialize(initialized));
     }
 
@@ -168,6 +169,7 @@ pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
     }
     state.browser.borrow_mut().take();
     shutdown();
+    let _ = std::fs::remove_dir_all(&root);
 
     if let Some(frame) = state.frame.borrow_mut().take() {
         return Ok(Rendered::Frame(PresentedFrame::Cpu(frame)));
@@ -255,10 +257,11 @@ fn hex_digit(nibble: u8) -> char {
     b"0123456789ABCDEF"[nibble as usize] as char
 }
 
-fn cache_dir() -> Result<PathBuf, SessionError> {
-    let path = std::env::temp_dir().join("susie-cef-cache");
-    std::fs::create_dir_all(&path).map_err(SessionError::Io)?;
-    Ok(path)
+fn cache_dir() -> Result<(PathBuf, PathBuf), SessionError> {
+    let root = std::env::temp_dir().join(format!("susie-cef-{}", std::process::id()));
+    let cache = root.join("cache");
+    std::fs::create_dir_all(&cache).map_err(SessionError::Io)?;
+    Ok((root, cache))
 }
 
 fn resource_dir() -> Result<PathBuf, SessionError> {
