@@ -139,7 +139,7 @@ pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
     let resources = resource_dir()?;
     let (root, cache) = cache_dir()?;
     let settings = Settings {
-        no_sandbox: 1,
+        no_sandbox: 0,
         windowless_rendering_enabled: 1,
         external_message_pump: 1,
         root_cache_path: cef_path(&root)?,
@@ -283,7 +283,6 @@ fn cef_path(path: &Path) -> Result<CefString, SessionError> {
 
 fn append_switches(command_line: &mut CommandLine) {
     for name in [
-        "no-sandbox",
         "disable-gpu",
         "disable-gpu-compositing",
         "disable-dev-shm-usage",
