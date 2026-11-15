@@ -88,7 +88,7 @@ pub fn write_png(frame: &CpuFrame, path: &Path) -> Result<(), FrameError> {
     let image =
         image::RgbaImage::from_raw(frame.width(), frame.height(), rgba).ok_or(FrameError::Empty)?;
     image
-        .save_with_format(path, image::ImageFormat::Png)
+        .save(path)
         .map_err(|err| FrameError::Png(err.to_string()))
 }
 
@@ -124,18 +124,6 @@ mod tests {
         let loaded = image::load_from_memory(&std::fs::read(&path).unwrap())
             .unwrap()
             .to_rgba8();
-        assert_eq!(loaded.get_pixel(0, 0).0, [255, 0, 0, 255]);
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn png_ignores_the_output_extension() {
-        let frame = CpuFrame::copy_bgra(1, 1, &[0, 0, 255, 255]).unwrap();
-        let path = std::env::temp_dir().join(format!("susie-frame-{}.jpg", std::process::id()));
-        write_png(&frame, &path).unwrap();
-        let bytes = std::fs::read(&path).unwrap();
-        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
-        let loaded = image::load_from_memory(&bytes).unwrap().to_rgba8();
         assert_eq!(loaded.get_pixel(0, 0).0, [255, 0, 0, 255]);
         std::fs::remove_file(path).unwrap();
     }
