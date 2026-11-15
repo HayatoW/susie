@@ -20,8 +20,6 @@ use serde::{Deserialize, Serialize};
 pub const EVIDENCE_RELATIVE_PATH: &str = "docs/evidence/metrics.jsonl";
 
 /// 1 回の起動で残す計測です。
-///
-/// テストや後続の起動が渡した数値を、そのまま 1 行にします。良し悪しは判断しません。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sample {
     pub startup_ms: u64,

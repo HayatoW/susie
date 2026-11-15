@@ -1,10 +1,7 @@
-//! プロセス開始から最初の 1 秒までのフレーム時計です。
-
 use std::time::{Duration, Instant};
 
 use crate::Sample;
 
-/// 最初のフレームから、 fps の数え終わりまでの長さです。
 const WINDOW: Duration = Duration::from_secs(1);
 
 /// 起動時間と、その最初の 1 秒に出したフレーム数を集めます。
