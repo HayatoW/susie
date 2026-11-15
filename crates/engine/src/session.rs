@@ -9,6 +9,7 @@ use cef::*;
 use crate::frame::{CpuFrame, Frame as PresentedFrame, VIEW_HEIGHT, VIEW_WIDTH};
 
 const PAINT_TIMEOUT: Duration = Duration::from_secs(90);
+const PAINT_QUIET: Duration = Duration::from_millis(200);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub enum Rendered {
@@ -55,6 +56,7 @@ struct State {
     nudged: Cell<bool>,
     closed: Cell<bool>,
     seen: Cell<(i32, i32)>,
+    latest: RefCell<Option<(Instant, CpuFrame)>>,
     frame: RefCell<Option<CpuFrame>>,
     failure: RefCell<Option<String>>,
     browser: RefCell<Option<Browser>>,
@@ -69,6 +71,7 @@ impl State {
             nudged: Cell::new(false),
             closed: Cell::new(false),
             seen: Cell::new((0, 0)),
+            latest: RefCell::new(None),
             frame: RefCell::new(None),
             failure: RefCell::new(None),
             browser: RefCell::new(None),
@@ -183,6 +186,7 @@ fn pump_until(state: &State, limit: Duration) {
         if state.loaded.get() && !state.nudged.get() {
             nudge(state);
         }
+        commit_quiet_frame(state);
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -198,6 +202,21 @@ fn nudge(state: &State) {
     host.was_resized();
     host.invalidate(PaintElementType::VIEW);
     state.nudged.set(true);
+}
+
+fn commit_quiet_frame(state: &State) {
+    let quiet = state
+        .latest
+        .borrow()
+        .as_ref()
+        .is_some_and(|(at, _)| at.elapsed() >= PAINT_QUIET);
+    if !quiet {
+        return;
+    }
+    let Some((_, frame)) = state.latest.borrow_mut().take() else {
+        return;
+    };
+    *state.frame.borrow_mut() = Some(frame);
 }
 
 fn close_browser(state: &State) {
@@ -275,27 +294,6 @@ fn append_switches(command_line: &mut CommandLine) {
         Some(&CefString::from("ozone-platform")),
         Some(&CefString::from("headless")),
     );
-}
-
-fn top_has_ink(bgra: &[u8], width: u32, height: u32) -> bool {
-    let width = width as usize;
-    let rows = (height as usize).min(180);
-    let columns = width.saturating_sub(24);
-    let mut dark = 0usize;
-    for y in 0..rows {
-        let row = y * width * 4;
-        for x in 0..columns {
-            let index = row + x * 4;
-            let pixel = &bgra[index..index + 4];
-            if pixel[0] < 240 || pixel[1] < 240 || pixel[2] < 240 {
-                dark += 1;
-                if dark >= 80 {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 wrap_app! {
@@ -500,7 +498,10 @@ wrap_render_handler! {
                 return;
             }
             self.state.seen.set((width, height));
-            if !self.state.loaded.get() || self.state.frame.borrow().is_some() {
+            if !self.state.loaded.get()
+                || !self.state.nudged.get()
+                || self.state.frame.borrow().is_some()
+            {
                 return;
             }
             if buffer.is_null() || width <= 0 || height <= 0 {
@@ -514,14 +515,11 @@ wrap_render_handler! {
             };
             // SAFETY: CEF は、この呼び出しのあいだ、バッファを BGRA の width * height * 4 バイトとして有効に保つ。
             let bytes = unsafe { std::slice::from_raw_parts(buffer, len) };
-            if width as u32 != VIEW_WIDTH
-                || height as u32 != VIEW_HEIGHT
-                || !top_has_ink(bytes, width as u32, height as u32)
-            {
+            if width as u32 != VIEW_WIDTH || height as u32 != VIEW_HEIGHT {
                 return;
             }
             match CpuFrame::copy_bgra(width as u32, height as u32, bytes) {
-                Ok(frame) => *self.state.frame.borrow_mut() = Some(frame),
+                Ok(frame) => *self.state.latest.borrow_mut() = Some((Instant::now(), frame)),
                 Err(err) => *self.state.failure.borrow_mut() = Some(err.to_string()),
             }
         }
@@ -530,47 +528,7 @@ wrap_render_handler! {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_file_url, file_url, top_has_ink};
-
-    fn paint(width: usize, height: usize, pixels: &[(usize, usize)]) -> Vec<u8> {
-        let mut bgra = vec![255u8; width * height * 4];
-        for &(x, y) in pixels {
-            let index = (y * width + x) * 4;
-            bgra[index] = 0;
-        }
-        bgra
-    }
-
-    #[test]
-    fn ink_ignores_the_scrollbar() {
-        let width = 40;
-        let height = 10;
-        let pixels: Vec<_> = (0..height)
-            .flat_map(|y| (width - 16..width).map(move |x| (x, y)))
-            .collect();
-        let bgra = paint(width, height, &pixels);
-        assert!(!top_has_ink(&bgra, width as u32, height as u32));
-    }
-
-    #[test]
-    fn ink_sees_text_in_the_top() {
-        let width = 40;
-        let height = 10;
-        let pixels: Vec<_> = (0..80).map(|n| (n % 16, n / 16)).collect();
-        let bgra = paint(width, height, &pixels);
-        assert!(top_has_ink(&bgra, width as u32, height as u32));
-    }
-
-    #[test]
-    fn ink_ignores_pixels_below_the_top() {
-        let width = 40;
-        let height = 200;
-        let pixels: Vec<_> = (180..height)
-            .flat_map(|y| (0..16).map(move |x| (x, y)))
-            .collect();
-        let bgra = paint(width, height, &pixels);
-        assert!(!top_has_ink(&bgra, width as u32, height as u32));
-    }
+    use super::{encode_file_url, file_url};
 
     #[test]
     fn file_url_encodes_reserved_characters() {
