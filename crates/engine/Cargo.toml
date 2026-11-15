@@ -6,4 +6,10 @@ publish = false
 description = "ページを画面の外で描き、フレームとして渡す"
 
 [dependencies]
+cef = { version = "156.5.0", default-features = false }
+cef-dll-sys = { version = "156.5.0", default-features = false }
 image = { version = "0.25.8", default-features = false, features = ["png"] }
+
+[[bin]]
+name = "render-first-page"
+path = "src/bin/render-first-page.rs"

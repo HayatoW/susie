@@ -1,15 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-/// 最初の表示が使うビューの幅。フィクスチャのスペーサはこれより高い。
 pub const VIEW_WIDTH: u32 = 800;
 
-/// 最初の表示が使うビューの高さ。フィクスチャのスペーサはこれより高い。
 pub const VIEW_HEIGHT: u32 = 600;
 
-/// CEF の OnPaint が渡す BGRA を、コールバックの外でも持つ画素。
-///
-/// バッファはコールバックが戻ると無効になる。ここへコピーしたあとの所有者は呼び出し側である。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CpuFrame {
     width: u32,
@@ -17,7 +12,6 @@ pub struct CpuFrame {
     bgra: Arc<[u8]>,
 }
 
-/// フレームの受け渡し。今は CPU の画素だけを持つ。DMA-BUF は後から別のバリアントとして足す。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame {
     Cpu(CpuFrame),
@@ -88,11 +82,11 @@ pub fn write_png(frame: &CpuFrame, path: &Path) -> Result<(), FrameError> {
         }
     }
     let mut rgba = Vec::with_capacity(frame.bgra().len());
-    for pixel in frame.bgra().chunks_exact(4) {
+    for pixel in frame.bgra().as_chunks::<4>().0 {
         rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
     }
-    let image = image::RgbaImage::from_raw(frame.width(), frame.height(), rgba)
-        .ok_or(FrameError::Empty)?;
+    let image =
+        image::RgbaImage::from_raw(frame.width(), frame.height(), rgba).ok_or(FrameError::Empty)?;
     image
         .save(path)
         .map_err(|err| FrameError::Png(err.to_string()))
@@ -148,6 +142,5 @@ mod tests {
         let end = html[start..].find('"').unwrap();
         let spacer: u32 = html[start..start + end].parse().unwrap();
         assert!(spacer > VIEW_HEIGHT);
-        assert!(VIEW_WIDTH > 0);
     }
 }
