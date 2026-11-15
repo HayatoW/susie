@@ -50,10 +50,20 @@ jobs:
           PY
 
       - name: Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-          components: rustfmt, clippy
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.toolchain.outputs.channel }}
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+            source "${CARGO_HOME:-$HOME/.cargo}/env"
+          fi
+          rustup toolchain install "$CHANNEL" --profile minimal --component rustfmt --component clippy --no-self-update
+          rustup default "$CHANNEL"
+          dirname "$(rustup which cargo)" >> "$GITHUB_PATH"
+          rustc --version
+          cargo --version
 
       - name: ワークスペースの有無
         id: workspace
@@ -69,7 +79,15 @@ jobs:
 
       - name: キャッシュ
         if: steps.workspace.outputs.present == 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ steps.toolchain.outputs.channel }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ steps.toolchain.outputs.channel }}-
 
       - name: cargo fmt --check
         if: steps.workspace.outputs.present == 'true'
