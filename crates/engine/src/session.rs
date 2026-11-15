@@ -212,7 +212,28 @@ fn file_url(path: &Path) -> Result<String, SessionError> {
     let text = absolute.to_str().ok_or(SessionError::Setup(
         "フィクスチャのパスが UTF-8 ではありません",
     ))?;
-    Ok(format!("file://{text}"))
+    Ok(encode_file_url(text))
+}
+
+fn encode_file_url(path: &str) -> String {
+    let mut url = String::from("file://");
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
+                url.push(byte as char);
+            }
+            _ => {
+                url.push('%');
+                url.push(hex_digit(byte >> 4));
+                url.push(hex_digit(byte & 0x0f));
+            }
+        }
+    }
+    url
+}
+
+fn hex_digit(nibble: u8) -> char {
+    b"0123456789ABCDEF"[nibble as usize] as char
 }
 
 fn cache_dir() -> Result<PathBuf, SessionError> {
@@ -509,7 +530,7 @@ wrap_render_handler! {
 
 #[cfg(test)]
 mod tests {
-    use super::top_has_ink;
+    use super::{encode_file_url, file_url, top_has_ink};
 
     fn paint(width: usize, height: usize, pixels: &[(usize, usize)]) -> Vec<u8> {
         let mut bgra = vec![255u8; width * height * 4];
@@ -549,5 +570,24 @@ mod tests {
             .collect();
         let bgra = paint(width, height, &pixels);
         assert!(!top_has_ink(&bgra, width as u32, height as u32));
+    }
+
+    #[test]
+    fn file_url_encodes_reserved_characters() {
+        let dir = std::env::temp_dir().join(format!("susie-url-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a%b #?.html");
+        std::fs::write(&path, b"x").unwrap();
+        let url = file_url(&path).unwrap();
+        let canonical = path.canonicalize().unwrap();
+        assert_eq!(url, encode_file_url(canonical.to_str().unwrap()));
+        assert!(!url.contains('#'));
+        assert!(!url.contains('?'));
+        assert!(!url.contains(' '));
+        assert!(url.contains("%23"));
+        assert!(url.contains("%3F"));
+        assert!(url.contains("%20"));
+        assert!(url.contains("%25"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
