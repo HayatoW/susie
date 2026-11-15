@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   rust:
@@ -18,52 +17,8 @@ jobs:
       - name: checkout
         uses: actions/checkout@v7
 
-      - name: ツールチェーンの channel を読む
-        id: toolchain
-        shell: bash
-        run: |
-          python3 - << 'PY'
-          import os
-          import pathlib
-          import re
-
-          toml_path = pathlib.Path("rust-toolchain.toml")
-          plain_path = pathlib.Path("rust-toolchain")
-          if toml_path.is_file():
-              match = re.search(
-                  r"(?m)^\s*channel\s*=\s*[\"']?([^\"'#\s]+)",
-                  toml_path.read_text(encoding="utf-8"),
-              )
-              if match is None:
-                  raise SystemExit("rust-toolchain.toml に channel がありません")
-              channel = match.group(1)
-          elif plain_path.is_file():
-              lines = plain_path.read_text(encoding="utf-8").splitlines()
-              channel = lines[0].strip() if lines else ""
-              if channel == "":
-                  raise SystemExit("rust-toolchain の channel が空です")
-          else:
-              channel = "stable"
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
-              handle.write(f"channel={channel}\n")
-          PY
-
-      - name: Rust
-        shell: bash
-        env:
-          CHANNEL: ${{ steps.toolchain.outputs.channel }}
-        run: |
-          set -euo pipefail
-          if ! command -v rustup >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
-            source "${CARGO_HOME:-$HOME/.cargo}/env"
-          fi
-          rustup toolchain install "$CHANNEL" --profile minimal --component rustfmt --component clippy --no-self-update
-          rustup default "$CHANNEL"
-          dirname "$(rustup which cargo)" >> "$GITHUB_PATH"
-          rustc --version
-          cargo --version
+      - name: rustfmt と clippy
+        run: rustup component add rustfmt clippy
 
       - name: ワークスペースの有無
         id: workspace
@@ -76,18 +31,6 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "Cargo.toml が無いので fmt と clippy と test は実行しません"
           fi
-
-      - name: キャッシュ
-        if: steps.workspace.outputs.present == 'true'
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: cargo-${{ runner.os }}-${{ steps.toolchain.outputs.channel }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-${{ steps.toolchain.outputs.channel }}-
 
       - name: cargo fmt --check
         if: steps.workspace.outputs.present == 'true'
