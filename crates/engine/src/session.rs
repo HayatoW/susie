@@ -10,6 +10,7 @@ use crate::frame::{CpuFrame, Frame as PresentedFrame, VIEW_HEIGHT, VIEW_WIDTH};
 
 const PAINT_TIMEOUT: Duration = Duration::from_secs(90);
 const PAINT_QUIET: Duration = Duration::from_millis(200);
+const PAINT_HOLD: Duration = Duration::from_millis(500);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub enum Rendered {
@@ -56,6 +57,7 @@ struct State {
     nudged: Cell<bool>,
     closed: Cell<bool>,
     seen: Cell<(i32, i32)>,
+    first_paint: Cell<Option<Instant>>,
     latest: RefCell<Option<(Instant, CpuFrame)>>,
     frame: RefCell<Option<CpuFrame>>,
     failure: RefCell<Option<String>>,
@@ -71,6 +73,7 @@ impl State {
             nudged: Cell::new(false),
             closed: Cell::new(false),
             seen: Cell::new((0, 0)),
+            first_paint: Cell::new(None),
             latest: RefCell::new(None),
             frame: RefCell::new(None),
             failure: RefCell::new(None),
@@ -188,9 +191,10 @@ fn pump_until(state: &State, limit: Duration) {
         if state.loaded.get() && !state.nudged.get() {
             nudge(state);
         }
-        commit_quiet_frame(state);
+        commit_ready_frame(state);
         std::thread::sleep(Duration::from_millis(10));
     }
+    commit_latest_frame(state);
 }
 
 fn nudge(state: &State) {
@@ -206,13 +210,29 @@ fn nudge(state: &State) {
     state.nudged.set(true);
 }
 
-fn commit_quiet_frame(state: &State) {
-    let quiet = state
-        .latest
-        .borrow()
-        .as_ref()
-        .is_some_and(|(at, _)| at.elapsed() >= PAINT_QUIET);
-    if !quiet {
+fn paint_is_ready(since_first: Duration, since_latest: Duration) -> bool {
+    since_latest >= PAINT_QUIET || since_first >= PAINT_HOLD
+}
+
+fn commit_ready_frame(state: &State) {
+    let ready = {
+        let latest = state.latest.borrow();
+        let Some((at, _)) = latest.as_ref() else {
+            return;
+        };
+        let Some(first) = state.first_paint.get() else {
+            return;
+        };
+        paint_is_ready(first.elapsed(), at.elapsed())
+    };
+    if !ready {
+        return;
+    }
+    commit_latest_frame(state);
+}
+
+fn commit_latest_frame(state: &State) {
+    if state.finished() {
         return;
     }
     let Some((_, frame)) = state.latest.borrow_mut().take() else {
@@ -520,7 +540,13 @@ wrap_render_handler! {
                 return;
             }
             match CpuFrame::copy_bgra(width as u32, height as u32, bytes) {
-                Ok(frame) => *self.state.latest.borrow_mut() = Some((Instant::now(), frame)),
+                Ok(frame) => {
+                    let now = Instant::now();
+                    if self.state.first_paint.get().is_none() {
+                        self.state.first_paint.set(Some(now));
+                    }
+                    *self.state.latest.borrow_mut() = Some((now, frame));
+                }
                 Err(err) => *self.state.failure.borrow_mut() = Some(err.to_string()),
             }
         }
@@ -529,7 +555,32 @@ wrap_render_handler! {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_file_url, file_url};
+    use std::time::Duration;
+
+    use super::{
+        commit_latest_frame, encode_file_url, file_url, paint_is_ready, State, PAINT_HOLD,
+        PAINT_QUIET,
+    };
+    use crate::frame::CpuFrame;
+
+    #[test]
+    fn moving_paint_is_kept_after_the_hold() {
+        let still = PAINT_QUIET - Duration::from_millis(1);
+        assert!(!paint_is_ready(still, still));
+        assert!(paint_is_ready(PAINT_QUIET, PAINT_QUIET));
+        let moving = Duration::from_millis(16);
+        assert!(!paint_is_ready(PAINT_HOLD - moving, moving));
+        assert!(paint_is_ready(PAINT_HOLD, moving));
+    }
+
+    #[test]
+    fn timeout_keeps_the_latest_frame() {
+        let state = State::new();
+        let frame = CpuFrame::copy_bgra(1, 1, &[1, 2, 3, 4]).unwrap();
+        *state.latest.borrow_mut() = Some((std::time::Instant::now(), frame.clone()));
+        commit_latest_frame(&state);
+        assert_eq!(state.frame.borrow().as_ref(), Some(&frame));
+    }
 
     #[test]
     fn file_url_encodes_reserved_characters() {
