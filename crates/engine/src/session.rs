@@ -289,7 +289,6 @@ fn append_switches(command_line: &mut CommandLine) {
         "disable-dev-shm-usage",
         "use-alloy-style",
         "disable-breakpad",
-        "allow-file-access-from-files",
     ] {
         command_line.append_switch(Some(&CefString::from(name)));
     }
