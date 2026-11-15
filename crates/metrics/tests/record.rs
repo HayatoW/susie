@@ -194,6 +194,40 @@ fn crlf_line_reads_the_same_numbers() {
 }
 
 #[test]
+fn append_separates_a_record_that_has_no_trailing_newline() {
+    let path = temp_path("nonewline-append.jsonl");
+    fs::write(&path, "{\"startup_ms\":4,\"fps\":5}").unwrap();
+
+    append_sample(
+        &path,
+        Sample {
+            startup_ms: 7,
+            fps: 8,
+        },
+    )
+    .unwrap();
+
+    let body = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        body,
+        "{\"startup_ms\":4,\"fps\":5}\n{\"startup_ms\":7,\"fps\":8}\n"
+    );
+    assert_eq!(
+        read_samples(&path).unwrap(),
+        vec![
+            Sample {
+                startup_ms: 4,
+                fps: 5
+            },
+            Sample {
+                startup_ms: 7,
+                fps: 8
+            },
+        ]
+    );
+}
+
+#[test]
 fn one_record_without_a_trailing_newline_still_reads() {
     let path = temp_path("nonewline.jsonl");
     fs::write(&path, "{\"startup_ms\":4,\"fps\":5}").unwrap();

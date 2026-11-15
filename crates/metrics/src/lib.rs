@@ -10,8 +10,8 @@ mod clock;
 
 pub use clock::{ClockError, FrameClock, Progress};
 
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -88,6 +88,7 @@ impl From<io::Error> for Error {
 }
 
 /// `sample` を `path` の末尾へ 1 行追加します。親ディレクトリがなければ作ります。
+/// 既存の末尾が改行でないときは、新しい行の前に改行を足します。
 pub fn append_sample(path: &Path, sample: Sample) -> Result<(), Error> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -98,10 +99,29 @@ pub fn append_sample(path: &Path, sample: Sample) -> Result<(), Error> {
     let mut line =
         serde_json::to_string(&sample).expect("Sample は 2 つの整数なので JSON にできます");
     line.push('\n');
+    if missing_trailing_newline(path)? {
+        line.insert(0, '\n');
+    }
 
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(line.as_bytes())?;
     Ok(())
+}
+
+fn missing_trailing_newline(path: &Path) -> Result<bool, Error> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(source) => return Err(source.into()),
+    };
+    let len = file.metadata()?.len();
+    if len == 0 {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0];
+    file.read_exact(&mut last)?;
+    Ok(last[0] != b'\n')
 }
 
 /// `path` の各行を、ファイルの順に読みます。ファイルが無いときはエラーです。
