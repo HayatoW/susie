@@ -18,15 +18,6 @@ const SCREEN_HEIGHT: u32 = 800;
 const STARTUP_DEADLINE: Duration = Duration::from_secs(45);
 const EXIT_DEADLINE: Duration = Duration::from_secs(20);
 
-const REPORT: &str = "\
-ヘッドレスの Sway で、 susie を起動しました。
-ウィンドウの中央の色は、画面の左上の色と違いました。
-閉じる前、プロセスは動いていました。
-ウィンドウへ閉じる要求を送りました。
-プロセスは終了コード 0 で終わりました。
-スクリーンショットは docs/evidence/S02/window.png です。
-";
-
 #[test]
 #[ignore = "starts headless Sway and lavapipe, and writes docs/evidence/S02"]
 fn closing_the_window_ends_the_process() {
@@ -386,7 +377,6 @@ fn publish(png: &[u8]) {
     let dir = Path::new(EVIDENCE_DIR);
     fs::create_dir_all(dir).expect("create the evidence dir");
     write_atomic(&dir.join("window.png"), png);
-    write_atomic(&dir.join("run.txt"), REPORT.as_bytes());
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) {
