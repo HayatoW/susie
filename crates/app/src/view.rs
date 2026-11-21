@@ -42,29 +42,41 @@ impl Browser {
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(frame) = poll_page() {
+        let fresh = poll_page();
+        if let Some(frame) = fresh.clone() {
             self.latest = Some(frame);
         }
-        let Some(frame) = self.latest.clone() else {
-            window.request_animation_frame();
-            return;
+        let measuring = !self.sample.finished();
+        let present = if measuring {
+            self.latest.clone()
+        } else {
+            fresh
         };
-        self.image = Some(copied_image(&frame));
-        if !self.sample.finished() {
-            let entity = cx.entity().clone();
-            window.on_next_frame(move |_window, cx| {
-                entity.update(cx, |this, _cx| {
-                    let Some(sample) = this.sample.observe(Instant::now()) else {
-                        return;
-                    };
-                    if let Err(err) = metrics::append_sample(sample) {
-                        eprintln!("計測を書けません。{err}");
-                    }
+        if let Some(frame) = present {
+            self.replace_image(window, copied_image(&frame));
+            if measuring {
+                let entity = cx.entity().clone();
+                window.on_next_frame(move |_window, cx| {
+                    entity.update(cx, |this, _cx| {
+                        let Some(sample) = this.sample.observe(Instant::now()) else {
+                            return;
+                        };
+                        if let Err(err) = metrics::append_sample(sample) {
+                            eprintln!("計測を書けません。{err}");
+                        }
+                    });
                 });
-            });
+            }
         }
         // 計測のあとも CEF を回さないと、スクロール後の描画が届かない。
         window.request_animation_frame();
+    }
+
+    fn replace_image(&mut self, window: &mut Window, image: Arc<RenderImage>) {
+        if let Some(previous) = self.image.replace(image) {
+            // RenderImage は毎回別の ID になる。残すとアトラスが増え続ける。
+            let _ = window.drop_image(previous);
+        }
     }
 }
 
