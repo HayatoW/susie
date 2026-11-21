@@ -1,0 +1,13 @@
+[package]
+name = "susie"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+gpui = "=0.2.2"
+
+[dev-dependencies]
+png = "0.18"
+serde_json = "1"
