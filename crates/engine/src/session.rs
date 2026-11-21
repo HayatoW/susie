@@ -115,6 +115,12 @@ fn boot() -> Result<Boot, SessionError> {
     Ok(Boot::Browser(BrowserBoot { args, app, state }))
 }
 
+pub fn is_cef_subprocess() -> bool {
+    std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--type" || arg.starts_with("--type="))
+}
+
 pub fn run_cef_subprocess() -> Result<i32, SessionError> {
     match boot()? {
         Boot::Subprocess(exit_code) => Ok(exit_code),
@@ -122,52 +128,90 @@ pub fn run_cef_subprocess() -> Result<i32, SessionError> {
     }
 }
 
-pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
-    let BrowserBoot {
-        args,
-        mut app,
-        state,
-    } = match boot()? {
-        Boot::Subprocess(exit_code) => return Ok(Rendered::Subprocess { exit_code }),
-        Boot::Browser(browser) => browser,
-    };
+pub enum Opened {
+    Subprocess { exit_code: i32 },
+    Page(Page),
+}
 
-    *state.url.borrow_mut() = file_url(fixture)?;
-    let resources = resource_dir()?;
-    let cache = cache_dir()?;
-    let settings = Settings {
-        no_sandbox: 0,
-        windowless_rendering_enabled: 1,
-        external_message_pump: 1,
-        root_cache_path: cef_path(&cache)?,
-        cache_path: cef_path(&cache)?,
-        resources_dir_path: cef_path(&resources)?,
-        locales_dir_path: cef_path(&resources.join("locales"))?,
-        log_severity: LogSeverity::WARNING,
-        ..Default::default()
-    };
-    let initialized = initialize(
-        Some(args.as_main_args()),
-        Some(&settings),
-        Some(&mut app),
-        std::ptr::null_mut(),
-    );
-    if initialized != 1 {
-        return Err(SessionError::Initialize(initialized));
+pub struct Page {
+    app: App,
+    state: Rc<State>,
+}
+
+impl Page {
+    pub fn open(fixture: &Path) -> Result<Opened, SessionError> {
+        let BrowserBoot {
+            args,
+            mut app,
+            state,
+        } = match boot()? {
+            Boot::Subprocess(exit_code) => return Ok(Opened::Subprocess { exit_code }),
+            Boot::Browser(browser) => browser,
+        };
+
+        *state.url.borrow_mut() = file_url(fixture)?;
+        let resources = resource_dir()?;
+        let cache = cache_dir()?;
+        let settings = Settings {
+            no_sandbox: 0,
+            windowless_rendering_enabled: 1,
+            external_message_pump: 1,
+            root_cache_path: cef_path(&cache)?,
+            cache_path: cef_path(&cache)?,
+            resources_dir_path: cef_path(&resources)?,
+            locales_dir_path: cef_path(&resources.join("locales"))?,
+            log_severity: LogSeverity::WARNING,
+            ..Default::default()
+        };
+        let initialized = initialize(
+            Some(args.as_main_args()),
+            Some(&settings),
+            Some(&mut app),
+            std::ptr::null_mut(),
+        );
+        if initialized != 1 {
+            return Err(SessionError::Initialize(initialized));
+        }
+        Ok(Opened::Page(Page { app, state }))
     }
 
-    pump_until(&state, PAINT_TIMEOUT);
-    close_browser(&state);
-    let close_start = Instant::now();
-    while !state.closed.get() && close_start.elapsed() < CLOSE_TIMEOUT {
+    /// CEF を 1 回進め、新しいフレームがあれば渡す。
+    pub fn poll(&mut self) -> Option<CpuFrame> {
         do_message_loop_work();
-        std::thread::sleep(Duration::from_millis(10));
+        if self.state.loaded.get() && !self.state.nudged.get() {
+            nudge(&self.state);
+        }
+        self.state.frame.borrow_mut().take()
     }
-    state.browser.borrow_mut().take();
-    shutdown();
 
+    pub fn shutdown(self) -> Result<CpuFrame, SessionError> {
+        close_browser(&self.state);
+        let close_start = Instant::now();
+        while !self.state.closed.get() && close_start.elapsed() < CLOSE_TIMEOUT {
+            do_message_loop_work();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.state.browser.borrow_mut().take();
+        shutdown();
+        let result = take_frame(&self.state);
+        drop(self.app);
+        result
+    }
+}
+
+pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
+    let page = match Page::open(fixture)? {
+        Opened::Subprocess { exit_code } => return Ok(Rendered::Subprocess { exit_code }),
+        Opened::Page(page) => page,
+    };
+    pump_until(&page.state, PAINT_TIMEOUT);
+    page.shutdown()
+        .map(|frame| Rendered::Frame(PresentedFrame::Cpu(frame)))
+}
+
+fn take_frame(state: &State) -> Result<CpuFrame, SessionError> {
     if let Some(frame) = state.frame.borrow_mut().take() {
-        return Ok(Rendered::Frame(PresentedFrame::Cpu(frame)));
+        return Ok(frame);
     }
     if let Some(message) = state.failure.borrow().clone() {
         return Err(SessionError::Paint(message));

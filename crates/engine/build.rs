@@ -7,4 +7,5 @@ fn main() {
     });
     println!("cargo:rustc-env=SUSIE_CEF_DIR={cef_dir}");
     println!("cargo:rustc-link-arg=-Wl,-rpath,{cef_dir}");
+    println!("cargo:cef_dir={cef_dir}");
 }

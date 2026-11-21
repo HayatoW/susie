@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 description = "ページを画面の外で描き、フレームとして渡す"
+links = "susie_engine"
 
 [dependencies]
 cef = { version = "156.5.0", default-features = false }
