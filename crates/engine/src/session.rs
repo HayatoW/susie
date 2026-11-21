@@ -190,6 +190,23 @@ impl Page {
         frame
     }
 
+    /// ウィンドウ上の左クリックを、ページのこの位置へ渡す。
+    /// `down` が true のときは押し、 false のときは離す。
+    pub fn click(&mut self, x: i32, y: i32, down: bool, click_count: i32) {
+        let browser = self.state.browser.borrow().clone();
+        let Some(host) = browser.and_then(|browser| browser.host()) else {
+            return;
+        };
+        let event = MouseEvent { x, y, modifiers: 0 };
+        host.send_mouse_move_event(Some(&event), 0);
+        host.send_mouse_click_event(
+            Some(&event),
+            MouseButtonType::LEFT,
+            i32::from(!down),
+            click_count,
+        );
+    }
+
     /// ウィンドウ上のホイールを、ページのこの位置へ渡す。
     pub fn scroll(&mut self, x: i32, y: i32, delta_x: i32, delta_y: i32) {
         if delta_x == 0 && delta_y == 0 {

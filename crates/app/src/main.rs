@@ -1,3 +1,4 @@
+mod click;
 mod metrics;
 mod present;
 mod scroll;
