@@ -216,10 +216,7 @@ impl Page {
         // フォーカスがない OSR は、キーを描画側へ渡さない。
         host.set_focus(1);
         for ch in text.chars() {
-            let Some(events) = committed_char_events(ch) else {
-                continue;
-            };
-            for event in events {
+            for event in committed_char_events(ch) {
                 host.send_key_event(Some(&event));
             }
         }
@@ -300,23 +297,66 @@ fn nudge(state: &State) {
 }
 
 /// 確定した 1 文字を、 CEF のキーイベントにする。
-/// 押し、文字、離しの順。制御文字と、 UTF-16 の 1 符号単位に収まらない文字は返さない。
-fn committed_char_events(ch: char) -> Option<[KeyEvent; 3]> {
-    let unit = u16::try_from(u32::from(ch)).ok()?;
-    if ch.is_control() {
-        return None;
-    }
-    let key_code = if ch.is_ascii_alphabetic() {
-        let upper = ch.to_ascii_uppercase();
-        i32::from(u8::try_from(u32::from(upper)).expect("ASCII の大文字は u8 に収まる"))
-    } else {
-        i32::from(unit)
+/// 押下の仮想キーが分かる文字は、押し、文字、離しの順。
+/// 分からない文字は、文字イベントだけにする。
+/// 文字コードを押下に使うと、 `%` や `.` がカーソル移動や削除になる。
+/// 制御文字と、 UTF-16 の 1 符号単位に収まらない文字は返さない。
+fn committed_char_events(ch: char) -> Vec<KeyEvent> {
+    let Some(unit) = u16::try_from(u32::from(ch)).ok() else {
+        return Vec::new();
     };
-    Some([
+    if ch.is_control() {
+        return Vec::new();
+    }
+    let char_event = key_event(KeyEventType::CHAR, i32::from(unit), unit);
+    let Some(key_code) = virtual_key(ch) else {
+        return vec![char_event];
+    };
+    vec![
         key_event(KeyEventType::RAWKEYDOWN, key_code, 0),
-        key_event(KeyEventType::CHAR, i32::from(unit), unit),
+        char_event,
         key_event(KeyEventType::KEYUP, key_code, 0),
-    ])
+    ]
+}
+
+/// 文字に対応する Windows の仮想キー。
+/// 編集キー (Home や Left や Delete) の番号は返さない。
+fn virtual_key(ch: char) -> Option<i32> {
+    if ch.is_ascii_alphabetic() {
+        return Some(ascii_code(ch.to_ascii_uppercase()));
+    }
+    if ch.is_ascii_digit() || ch == ' ' {
+        return Some(ascii_code(ch));
+    }
+    // US キーボードの記号。数字キーか OEM キーで、文字コードとは別。
+    Some(match ch {
+        '!' => i32::from(b'1'),
+        '@' => i32::from(b'2'),
+        '#' => i32::from(b'3'),
+        '$' => i32::from(b'4'),
+        '%' => i32::from(b'5'),
+        '^' => i32::from(b'6'),
+        '&' => i32::from(b'7'),
+        '*' => i32::from(b'8'),
+        '(' => i32::from(b'9'),
+        ')' => i32::from(b'0'),
+        '-' | '_' => 0xBD,
+        '=' | '+' => 0xBB,
+        '[' | '{' => 0xDB,
+        ']' | '}' => 0xDD,
+        '\\' | '|' => 0xDC,
+        ';' | ':' => 0xBA,
+        '\'' | '"' => 0xDE,
+        ',' | '<' => 0xBC,
+        '.' | '>' => 0xBE,
+        '/' | '?' => 0xBF,
+        '`' | '~' => 0xC0,
+        _ => return None,
+    })
+}
+
+fn ascii_code(ch: char) -> i32 {
+    i32::from(u8::try_from(u32::from(ch)).expect("ASCII は u8 に収まる"))
 }
 
 fn key_event(type_: KeyEventType, windows_key_code: i32, character: u16) -> KeyEvent {
@@ -373,7 +413,8 @@ mod tests {
 
     #[test]
     fn letter_is_keydown_char_and_keyup() {
-        let events = committed_char_events('s').expect("s is a committed character");
+        let events = committed_char_events('s');
+        assert_eq!(events.len(), 3);
         assert_eq!(events[0].type_, KeyEventType::RAWKEYDOWN);
         assert_eq!(events[0].windows_key_code, i32::from(b'S'));
         assert_eq!(events[0].character, 0);
@@ -386,8 +427,22 @@ mod tests {
     }
 
     #[test]
+    fn punctuation_keydown_is_not_an_editing_key() {
+        let period = committed_char_events('.');
+        assert_eq!(period[0].type_, KeyEventType::RAWKEYDOWN);
+        assert_eq!(period[0].windows_key_code, 0xBE);
+        assert_eq!(period[1].character, u16::from(b'.'));
+        let percent = committed_char_events('%');
+        assert_eq!(percent[0].windows_key_code, i32::from(b'5'));
+        assert_ne!(percent[0].windows_key_code, 37);
+        let dollar = committed_char_events('$');
+        assert_eq!(dollar[0].windows_key_code, i32::from(b'4'));
+        assert_ne!(dollar[0].windows_key_code, 36);
+    }
+
+    #[test]
     fn control_character_is_not_a_key() {
-        assert!(committed_char_events('\n').is_none());
+        assert!(committed_char_events('\n').is_empty());
     }
 }
 
