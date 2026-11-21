@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>susie first page</title>
+  <style>
+    html, body {
+      margin: 0;
+      background: #ffffff;
+      color: #111111;
+      font-family: "Noto Sans", "Noto Sans Display", sans-serif;
+    }
+    #top {
+      font-size: 72px;
+      line-height: 1.1;
+      padding: 32px;
+    }
+    .controls {
+      padding: 0 32px 32px;
+      font-size: 24px;
+    }
+    button, input {
+      font: inherit;
+      font-size: 24px;
+    }
+    button {
+      padding: 8px 16px;
+    }
+    input {
+      width: 240px;
+      padding: 8px;
+      margin-left: 16px;
+    }
+    .spacer {
+      height: 2400px;
+    }
+    #bottom {
+      font-size: 72px;
+      padding: 32px;
+    }
+  </style>
+</head>
+<body>
+  <div id="top">susie-top</div>
+  <div class="controls">
+    <button id="click" type="button">press</button>
+    <input id="field" type="text">
+  </div>
+  <div class="spacer" data-susie-spacer="2400"></div>
+  <div id="bottom">susie-bottom</div>
+  <script>
+    document.getElementById("click").addEventListener("click", function () {
+      var mark = document.createElement("div");
+      mark.id = "clicked";
+      mark.textContent = "susie-clicked";
+      document.body.insertBefore(mark, document.querySelector(".controls"));
+    });
+  </script>
+</body>
+</html>
