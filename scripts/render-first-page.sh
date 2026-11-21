@@ -14,7 +14,7 @@ mkdir -p "$CEF_PATH"
 mkdir -p "$ROOT/docs/evidence/S03"
 
 cargo build --manifest-path "$ROOT/crates/engine/Cargo.toml" --bin render-first-page
-"$ROOT/crates/engine/target/debug/render-first-page" \
+"$ROOT/target/debug/render-first-page" \
   --fixture "$ROOT/fixtures/first-page.html" \
   --output "$ROOT/docs/evidence/S03/frame.png"
 
