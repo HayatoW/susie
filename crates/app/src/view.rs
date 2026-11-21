@@ -42,9 +42,6 @@ impl Browser {
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sample.finished() {
-            return;
-        }
         if let Some(frame) = poll_page() {
             self.latest = Some(frame);
         }
@@ -53,17 +50,20 @@ impl Browser {
             return;
         };
         self.image = Some(copied_image(&frame));
-        let entity = cx.entity().clone();
-        window.on_next_frame(move |_window, cx| {
-            entity.update(cx, |this, _cx| {
-                let Some(sample) = this.sample.observe(Instant::now()) else {
-                    return;
-                };
-                if let Err(err) = metrics::append_sample(sample) {
-                    eprintln!("計測を書けません。{err}");
-                }
+        if !self.sample.finished() {
+            let entity = cx.entity().clone();
+            window.on_next_frame(move |_window, cx| {
+                entity.update(cx, |this, _cx| {
+                    let Some(sample) = this.sample.observe(Instant::now()) else {
+                        return;
+                    };
+                    if let Err(err) = metrics::append_sample(sample) {
+                        eprintln!("計測を書けません。{err}");
+                    }
+                });
             });
-        });
+        }
+        // 計測のあとも CEF を回さないと、スクロール後の描画が届かない。
         window.request_animation_frame();
     }
 }
