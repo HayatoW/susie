@@ -2,14 +2,8 @@ use std::env;
 use std::path::Path;
 use std::process::ExitCode;
 
-fn is_cef_subprocess() -> bool {
-    env::args()
-        .skip(1)
-        .any(|arg| arg == "--type" || arg.starts_with("--type="))
-}
-
 fn main() -> ExitCode {
-    if is_cef_subprocess() {
+    if engine::is_cef_subprocess() {
         return match engine::run_cef_subprocess() {
             Ok(exit_code) => std::process::exit(exit_code),
             Err(err) => {
