@@ -55,6 +55,7 @@ struct State {
     nudged: Cell<bool>,
     closed: Cell<bool>,
     seen: Cell<(i32, i32)>,
+    delivered: Cell<bool>,
     frame: RefCell<Option<CpuFrame>>,
     failure: RefCell<Option<String>>,
     browser: RefCell<Option<Browser>>,
@@ -69,6 +70,7 @@ impl State {
             nudged: Cell::new(false),
             closed: Cell::new(false),
             seen: Cell::new((0, 0)),
+            delivered: Cell::new(false),
             frame: RefCell::new(None),
             failure: RefCell::new(None),
             browser: RefCell::new(None),
@@ -181,7 +183,25 @@ impl Page {
         if self.state.loaded.get() && !self.state.nudged.get() {
             nudge(&self.state);
         }
-        self.state.frame.borrow_mut().take()
+        let frame = self.state.frame.borrow_mut().take();
+        if frame.is_some() {
+            self.state.delivered.set(true);
+        }
+        frame
+    }
+
+    /// ウィンドウ上のホイールを、ページのこの位置へ渡す。
+    pub fn scroll(&mut self, x: i32, y: i32, delta_x: i32, delta_y: i32) {
+        if delta_x == 0 && delta_y == 0 {
+            return;
+        }
+        let browser = self.state.browser.borrow().clone();
+        let Some(host) = browser.and_then(|browser| browser.host()) else {
+            return;
+        };
+        let event = MouseEvent { x, y, modifiers: 0 };
+        host.send_mouse_move_event(Some(&event), 0);
+        host.send_mouse_wheel_event(Some(&event), delta_x, delta_y);
     }
 
     pub fn shutdown(self) -> Result<CpuFrame, SessionError> {
@@ -521,10 +541,7 @@ wrap_render_handler! {
                 return;
             }
             self.state.seen.set((width, height));
-            if !self.state.loaded.get()
-                || !self.state.nudged.get()
-                || self.state.frame.borrow().is_some()
-            {
+            if !self.state.loaded.get() || !self.state.nudged.get() {
                 return;
             }
             if buffer.is_null() || width <= 0 || height <= 0 {
@@ -538,9 +555,13 @@ wrap_render_handler! {
             };
             // SAFETY: CEF は、この呼び出しのあいだ、バッファを BGRA の width * height * 4 バイトとして有効に保つ。
             let bytes = unsafe { std::slice::from_raw_parts(buffer, len) };
-            if width as u32 != VIEW_WIDTH
-                || height as u32 != VIEW_HEIGHT
-                || !top_has_ink(bytes, width as u32, height as u32)
+            if width as u32 != VIEW_WIDTH || height as u32 != VIEW_HEIGHT {
+                return;
+            }
+            // 最初の 1 枚は上端の文字で確定する。そのあとは、スクロールで上端が空白でも受ける。
+            if !self.state.delivered.get()
+                && (self.state.frame.borrow().is_some()
+                    || !top_has_ink(bytes, width as u32, height as u32))
             {
                 return;
             }

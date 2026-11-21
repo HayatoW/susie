@@ -1,5 +1,6 @@
 mod metrics;
 mod present;
+mod scroll;
 mod view;
 
 use std::path::PathBuf;

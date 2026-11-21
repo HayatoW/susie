@@ -4,11 +4,13 @@ use std::time::Instant;
 
 use engine::{CpuFrame, Page};
 use gpui::{
-    Context, IntoElement, ObjectFit, Render, RenderImage, Window, div, img, prelude::*, rgb,
+    Context, IntoElement, ObjectFit, Render, RenderImage, ScrollWheelEvent, Window, div, img,
+    prelude::*, rgb,
 };
 
 use crate::metrics::{self, Sampler};
 use crate::present::copied_image;
+use crate::scroll::{PageWheel, page_wheel};
 
 thread_local! {
     static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
@@ -83,7 +85,17 @@ impl Browser {
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.tick(window, cx);
-        let mut root = div().size_full().bg(rgb(0xffffff));
+        let mut root = div()
+            .size_full()
+            .bg(rgb(0xffffff))
+            .on_scroll_wheel(cx.listener(|_this, event: &ScrollWheelEvent, window, _cx| {
+                scroll_page(page_wheel(
+                    event.position,
+                    window.viewport_size(),
+                    event.delta,
+                    window.line_height(),
+                ));
+            }));
         if let Some(image) = self.image.clone() {
             root = root.child(img(image).size_full().object_fit(ObjectFit::Fill));
         }
@@ -93,4 +105,15 @@ impl Render for Browser {
 
 fn poll_page() -> Option<CpuFrame> {
     PAGE.with(|slot| slot.borrow_mut().as_mut().and_then(Page::poll))
+}
+
+fn scroll_page(wheel: PageWheel) {
+    if wheel.delta_x == 0 && wheel.delta_y == 0 {
+        return;
+    }
+    PAGE.with(|slot| {
+        if let Some(page) = slot.borrow_mut().as_mut() {
+            page.scroll(wheel.x, wheel.y, wheel.delta_x, wheel.delta_y);
+        }
+    });
 }
