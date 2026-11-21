@@ -2,6 +2,7 @@ mod click;
 mod metrics;
 mod present;
 mod scroll;
+mod text;
 mod view;
 
 use std::path::PathBuf;
@@ -63,7 +64,12 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            move |_, cx| cx.new(|_| Browser::new(started)),
+            move |window, cx| {
+                let browser = cx.new(|cx| Browser::new(started, cx));
+                // ルートの div がキーを受け取る。フォーカスがないと、キーはページへ届かない。
+                window.focus(&browser.read(cx).focus);
+                browser
+            },
         )
         .expect("open the susie window");
     });

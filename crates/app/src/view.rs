@@ -4,14 +4,15 @@ use std::time::Instant;
 
 use engine::{CpuFrame, Page};
 use gpui::{
-    Context, IntoElement, MouseButton, MouseDownEvent, MouseUpEvent, ObjectFit, Render,
-    RenderImage, ScrollWheelEvent, Window, div, img, prelude::*, rgb,
+    Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent,
+    ObjectFit, Render, RenderImage, ScrollWheelEvent, Window, div, img, prelude::*, rgb,
 };
 
 use crate::click::{PageClick, page_click};
 use crate::metrics::{self, Sampler};
 use crate::present::copied_image;
 use crate::scroll::{PageWheel, page_wheel};
+use crate::text::committed_text;
 
 thread_local! {
     static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
@@ -30,6 +31,7 @@ pub fn close_page() {
 }
 
 pub struct Browser {
+    pub focus: FocusHandle,
     latest: Option<CpuFrame>,
     image: Option<Arc<RenderImage>>,
     // 直前のフレームがサンプルした画像。次の tick までアトラスに残す。
@@ -38,8 +40,9 @@ pub struct Browser {
 }
 
 impl Browser {
-    pub fn new(started: Instant) -> Self {
+    pub fn new(started: Instant, cx: &mut Context<Self>) -> Self {
         Self {
+            focus: cx.focus_handle(),
             latest: None,
             image: None,
             retired: None,
@@ -95,8 +98,15 @@ impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.tick(window, cx);
         let mut root = div()
+            .track_focus(&self.focus)
             .size_full()
             .bg(rgb(0xffffff))
+            .on_key_down(cx.listener(|_this, event: &KeyDownEvent, _window, _cx| {
+                let Some(text) = committed_text(&event.keystroke) else {
+                    return;
+                };
+                commit_page(&text);
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, event: &MouseDownEvent, window, _cx| {
@@ -141,6 +151,14 @@ fn click_page(click: PageClick, down: bool, click_count: usize) {
     PAGE.with(|slot| {
         if let Some(page) = slot.borrow_mut().as_mut() {
             page.click(click.x, click.y, down, count);
+        }
+    });
+}
+
+fn commit_page(text: &str) {
+    PAGE.with(|slot| {
+        if let Some(page) = slot.borrow_mut().as_mut() {
+            page.commit_text(text);
         }
     });
 }
