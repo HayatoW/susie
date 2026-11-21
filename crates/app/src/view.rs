@@ -4,11 +4,13 @@ use std::time::Instant;
 
 use engine::{CpuFrame, Page};
 use gpui::{
-    Context, IntoElement, ObjectFit, Render, RenderImage, Window, div, img, prelude::*, rgb,
+    Context, IntoElement, ObjectFit, Render, RenderImage, ScrollWheelEvent, Window, div, img,
+    prelude::*, rgb,
 };
 
 use crate::metrics::{self, Sampler};
 use crate::present::copied_image;
+use crate::scroll::{PageWheel, page_wheel};
 
 thread_local! {
     static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
@@ -29,6 +31,8 @@ pub fn close_page() {
 pub struct Browser {
     latest: Option<CpuFrame>,
     image: Option<Arc<RenderImage>>,
+    // 直前のフレームがサンプルした画像。次の tick までアトラスに残す。
+    retired: Option<Arc<RenderImage>>,
     sample: Sampler,
 }
 
@@ -37,41 +41,69 @@ impl Browser {
         Self {
             latest: None,
             image: None,
+            retired: None,
             sample: Sampler::new(started),
         }
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sample.finished() {
-            return;
+        // draw は、今回の送信のあとで、前回の GPU 完了を待つ。
+        // その待ちが終わった次の tick で、前回使った画像を外す。
+        if let Some(retired) = self.retired.take() {
+            let _ = window.drop_image(retired);
         }
-        if let Some(frame) = poll_page() {
+        let fresh = poll_page();
+        if let Some(frame) = fresh.clone() {
             self.latest = Some(frame);
         }
-        let Some(frame) = self.latest.clone() else {
-            window.request_animation_frame();
-            return;
+        let measuring = !self.sample.finished();
+        let present = if measuring {
+            self.latest.clone()
+        } else {
+            fresh
         };
-        self.image = Some(copied_image(&frame));
-        let entity = cx.entity().clone();
-        window.on_next_frame(move |_window, cx| {
-            entity.update(cx, |this, _cx| {
-                let Some(sample) = this.sample.observe(Instant::now()) else {
-                    return;
-                };
-                if let Err(err) = metrics::append_sample(sample) {
-                    eprintln!("計測を書けません。{err}");
-                }
-            });
-        });
+        if let Some(frame) = present {
+            self.replace_image(copied_image(&frame));
+            if measuring {
+                let entity = cx.entity().clone();
+                window.on_next_frame(move |_window, cx| {
+                    entity.update(cx, |this, _cx| {
+                        let Some(sample) = this.sample.observe(Instant::now()) else {
+                            return;
+                        };
+                        if let Err(err) = metrics::append_sample(sample) {
+                            eprintln!("計測を書けません。{err}");
+                        }
+                    });
+                });
+            }
+        }
+        // 計測のあとも CEF を回さないと、スクロール後の描画が届かない。
         window.request_animation_frame();
+    }
+
+    fn replace_image(&mut self, image: Arc<RenderImage>) {
+        if let Some(previous) = self.image.replace(image) {
+            // 今外すと、直前の draw がまだサンプルしているテクスチャを消す。
+            self.retired = Some(previous);
+        }
     }
 }
 
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.tick(window, cx);
-        let mut root = div().size_full().bg(rgb(0xffffff));
+        let mut root = div()
+            .size_full()
+            .bg(rgb(0xffffff))
+            .on_scroll_wheel(cx.listener(|_this, event: &ScrollWheelEvent, window, _cx| {
+                scroll_page(page_wheel(
+                    event.position,
+                    window.viewport_size(),
+                    event.delta,
+                    window.line_height(),
+                ));
+            }));
         if let Some(image) = self.image.clone() {
             root = root.child(img(image).size_full().object_fit(ObjectFit::Fill));
         }
@@ -81,4 +113,15 @@ impl Render for Browser {
 
 fn poll_page() -> Option<CpuFrame> {
     PAGE.with(|slot| slot.borrow_mut().as_mut().and_then(Page::poll))
+}
+
+fn scroll_page(wheel: PageWheel) {
+    if wheel.delta_x == 0 && wheel.delta_y == 0 {
+        return;
+    }
+    PAGE.with(|slot| {
+        if let Some(page) = slot.borrow_mut().as_mut() {
+            page.scroll(wheel.x, wheel.y, wheel.delta_x, wheel.delta_y);
+        }
+    });
 }
