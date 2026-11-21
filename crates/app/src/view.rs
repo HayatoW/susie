@@ -31,6 +31,8 @@ pub fn close_page() {
 pub struct Browser {
     latest: Option<CpuFrame>,
     image: Option<Arc<RenderImage>>,
+    // 直前のフレームがサンプルした画像。次の tick までアトラスに残す。
+    retired: Option<Arc<RenderImage>>,
     sample: Sampler,
 }
 
@@ -39,11 +41,17 @@ impl Browser {
         Self {
             latest: None,
             image: None,
+            retired: None,
             sample: Sampler::new(started),
         }
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // draw は、今回の送信のあとで、前回の GPU 完了を待つ。
+        // その待ちが終わった次の tick で、前回使った画像を外す。
+        if let Some(retired) = self.retired.take() {
+            let _ = window.drop_image(retired);
+        }
         let fresh = poll_page();
         if let Some(frame) = fresh.clone() {
             self.latest = Some(frame);
@@ -55,7 +63,7 @@ impl Browser {
             fresh
         };
         if let Some(frame) = present {
-            self.replace_image(window, copied_image(&frame));
+            self.replace_image(copied_image(&frame));
             if measuring {
                 let entity = cx.entity().clone();
                 window.on_next_frame(move |_window, cx| {
@@ -74,10 +82,10 @@ impl Browser {
         window.request_animation_frame();
     }
 
-    fn replace_image(&mut self, window: &mut Window, image: Arc<RenderImage>) {
+    fn replace_image(&mut self, image: Arc<RenderImage>) {
         if let Some(previous) = self.image.replace(image) {
-            // RenderImage は毎回別の ID になる。残すとアトラスが増え続ける。
-            let _ = window.drop_image(previous);
+            // 今外すと、直前の draw がまだサンプルしているテクスチャを消す。
+            self.retired = Some(previous);
         }
     }
 }
