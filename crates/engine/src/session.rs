@@ -207,6 +207,24 @@ impl Page {
         );
     }
 
+    /// 確定した文字をページへ渡す。変換中の表示は扱わない。
+    pub fn commit_text(&mut self, text: &str) {
+        let browser = self.state.browser.borrow().clone();
+        let Some(host) = browser.and_then(|browser| browser.host()) else {
+            return;
+        };
+        // フォーカスがない OSR は、キーを描画側へ渡さない。
+        host.set_focus(1);
+        for ch in text.chars() {
+            let Some(events) = committed_char_events(ch) else {
+                continue;
+            };
+            for event in events {
+                host.send_key_event(Some(&event));
+            }
+        }
+    }
+
     /// ウィンドウ上のホイールを、ページのこの位置へ渡す。
     pub fn scroll(&mut self, x: i32, y: i32, delta_x: i32, delta_y: i32) {
         if delta_x == 0 && delta_y == 0 {
@@ -281,6 +299,36 @@ fn nudge(state: &State) {
     state.nudged.set(true);
 }
 
+/// 確定した 1 文字を、 CEF のキーイベントにする。
+/// 押し、文字、離しの順。制御文字と、 UTF-16 の 1 符号単位に収まらない文字は返さない。
+fn committed_char_events(ch: char) -> Option<[KeyEvent; 3]> {
+    let unit = u16::try_from(u32::from(ch)).ok()?;
+    if ch.is_control() {
+        return None;
+    }
+    let key_code = if ch.is_ascii_alphabetic() {
+        let upper = ch.to_ascii_uppercase();
+        i32::from(u8::try_from(u32::from(upper)).expect("ASCII の大文字は u8 に収まる"))
+    } else {
+        i32::from(unit)
+    };
+    Some([
+        key_event(KeyEventType::RAWKEYDOWN, key_code, 0),
+        key_event(KeyEventType::CHAR, i32::from(unit), unit),
+        key_event(KeyEventType::KEYUP, key_code, 0),
+    ])
+}
+
+fn key_event(type_: KeyEventType, windows_key_code: i32, character: u16) -> KeyEvent {
+    KeyEvent {
+        type_,
+        windows_key_code,
+        character,
+        unmodified_character: character,
+        ..KeyEvent::default()
+    }
+}
+
 fn close_browser(state: &State) {
     let browser = state.browser.borrow().clone();
     if let Some(host) = browser.and_then(|browser| browser.host()) {
@@ -317,6 +365,30 @@ fn cef_path(path: &Path) -> Result<CefString, SessionError> {
         .to_str()
         .ok_or(SessionError::Setup("パスが UTF-8 ではありません"))?;
     Ok(CefString::from(text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn letter_is_keydown_char_and_keyup() {
+        let events = committed_char_events('s').expect("s is a committed character");
+        assert_eq!(events[0].type_, KeyEventType::RAWKEYDOWN);
+        assert_eq!(events[0].windows_key_code, i32::from(b'S'));
+        assert_eq!(events[0].character, 0);
+        assert_eq!(events[1].type_, KeyEventType::CHAR);
+        assert_eq!(events[1].windows_key_code, i32::from(b's'));
+        assert_eq!(events[1].character, u16::from(b's'));
+        assert_eq!(events[1].unmodified_character, u16::from(b's'));
+        assert_eq!(events[2].type_, KeyEventType::KEYUP);
+        assert_eq!(events[2].windows_key_code, i32::from(b'S'));
+    }
+
+    #[test]
+    fn control_character_is_not_a_key() {
+        assert!(committed_char_events('\n').is_none());
+    }
 }
 
 fn top_has_ink(bgra: &[u8], width: u32, height: u32) -> bool {
