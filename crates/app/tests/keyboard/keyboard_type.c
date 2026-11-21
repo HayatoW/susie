@@ -77,23 +77,27 @@ static int send_keymap(struct zwp_virtual_keyboard_v1 *keyboard, struct xkb_keym
 }
 
 // xkb のキーコードは evdev に 8 を足した値。プロトコルへ渡すのは evdev の値。
-static int evdev_key(struct xkb_keymap *keymap, char ch, uint32_t *key_out) {
+// level 1 は shift の付いた記号。shift が要るときは *shifted を 1 にする。
+static int evdev_key(struct xkb_keymap *keymap, char ch, uint32_t *key_out, int *shifted) {
     xkb_keysym_t want = xkb_utf32_to_keysym((uint32_t)(unsigned char)ch);
     if (want == XKB_KEY_NoSymbol) {
         return -1;
     }
     xkb_keycode_t min = xkb_keymap_min_keycode(keymap);
     xkb_keycode_t max = xkb_keymap_max_keycode(keymap);
-    for (xkb_keycode_t code = min; code <= max; code++) {
-        const xkb_keysym_t *syms = NULL;
-        int count = xkb_keymap_key_get_syms_by_level(keymap, code, 0, 0, &syms);
-        for (int i = 0; i < count; i++) {
-            if (syms[i] == want) {
-                if (code < 8) {
-                    return -1;
+    for (int level = 0; level <= 1; level++) {
+        for (xkb_keycode_t code = min; code <= max; code++) {
+            const xkb_keysym_t *syms = NULL;
+            int count = xkb_keymap_key_get_syms_by_level(keymap, code, 0, level, &syms);
+            for (int i = 0; i < count; i++) {
+                if (syms[i] == want) {
+                    if (code < 8) {
+                        return -1;
+                    }
+                    *key_out = (uint32_t)code - 8u;
+                    *shifted = level == 1;
+                    return 0;
                 }
-                *key_out = (uint32_t)code - 8u;
-                return 0;
             }
         }
     }
@@ -110,11 +114,25 @@ static int send_key(struct wl_display *display, struct zwp_virtual_keyboard_v1 *
     return 0;
 }
 
+static int send_mods(struct wl_display *display, struct zwp_virtual_keyboard_v1 *keyboard,
+                     uint32_t depressed) {
+    zwp_virtual_keyboard_v1_modifiers(keyboard, depressed, 0, 0, 0);
+    if (wl_display_roundtrip(display) < 0) {
+        fprintf(stderr, "modifier roundtrip failed\n");
+        return -1;
+    }
+    return 0;
+}
+
 static int type_char(struct wl_display *display, struct zwp_virtual_keyboard_v1 *keyboard,
-                     struct xkb_keymap *keymap, char ch) {
+                     struct xkb_keymap *keymap, uint32_t shift_mask, char ch) {
     uint32_t key = 0;
-    if (evdev_key(keymap, ch, &key) != 0) {
+    int shifted = 0;
+    if (evdev_key(keymap, ch, &key, &shifted) != 0) {
         fprintf(stderr, "no key for %c\n", ch);
+        return -1;
+    }
+    if (shifted && send_mods(display, keyboard, shift_mask) != 0) {
         return -1;
     }
     if (send_key(display, keyboard, key, KEY_PRESSED) != 0) {
@@ -122,7 +140,11 @@ static int type_char(struct wl_display *display, struct zwp_virtual_keyboard_v1 
     }
     // 押しと離しを、別の入力にする。
     usleep(80000);
-    return send_key(display, keyboard, key, KEY_RELEASED);
+    int released = send_key(display, keyboard, key, KEY_RELEASED);
+    if (shifted && send_mods(display, keyboard, 0) != 0) {
+        return -1;
+    }
+    return released;
 }
 
 int main(int argc, char **argv) {
@@ -159,6 +181,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "keymap roundtrip failed\n");
         return 1;
     }
+    xkb_mod_index_t shift = xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_SHIFT);
+    if (shift == XKB_MOD_INVALID) {
+        fprintf(stderr, "shift modifier missing\n");
+        return 1;
+    }
+    uint32_t shift_mask = 1u << shift;
     printf("ready\n");
     fflush(stdout);
 
@@ -175,7 +203,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "unsupported character\n");
                 return 1;
             }
-            if (type_char(display, keyboard, keymap, *cursor) != 0) {
+            if (type_char(display, keyboard, keymap, shift_mask, *cursor) != 0) {
                 return 1;
             }
             usleep(80000);

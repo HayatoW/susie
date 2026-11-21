@@ -38,7 +38,7 @@ fn field_shows_susie() {
     thread::sleep(Duration::from_millis(300));
     let mut recording = Recording::start(&sway);
     thread::sleep(Duration::from_millis(500));
-    type_until_shown(&sway, &mut app);
+    let mut keyboard = type_until_shown(&sway, &mut app);
     thread::sleep(Duration::from_millis(700));
     let raw = recording.stop();
     let video = transcode(&raw);
@@ -55,6 +55,8 @@ fn field_shows_susie() {
         recognize(&late)
     );
     publish(&video);
+    // 録画のあとに記号を打つ。録画は susie だけのまま、削除やカーソル移動を確かめる。
+    assert_symbols_stay(&sway, &mut app, &mut keyboard);
     assert!(
         app.is_running(),
         "susie exited before the window closed\n{}",
@@ -417,7 +419,7 @@ fn wait_until_top(sway: &Sway, app: &mut App, metrics_before: usize) {
     );
 }
 
-fn type_until_shown(sway: &Sway, app: &mut App) {
+fn type_until_shown(sway: &Sway, app: &mut App) -> Keyboard {
     let deadline = Instant::now() + TYPE_DEADLINE;
     let shot_path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("s07-field.png");
     let press = press_word(sway, &shot_path);
@@ -442,7 +444,7 @@ fn type_until_shown(sway: &Sway, app: &mut App) {
         );
         capture(sway, &shot_path);
         if field_has(&shot_path, "susie") {
-            return;
+            return keyboard;
         }
         last = recognize(&shot_path);
         thread::sleep(Duration::from_millis(300));
@@ -450,6 +452,33 @@ fn type_until_shown(sway: &Sway, app: &mut App) {
     panic!(
         "susie was not in the field within {}s\n{last}\n{}",
         TYPE_DEADLINE.as_secs(),
+        app.stderr()
+    );
+}
+
+fn assert_symbols_stay(sway: &Sway, app: &mut App, keyboard: &mut Keyboard) {
+    let shot_path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("s07-symbols.png");
+    keyboard.type_text(".$%");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        assert!(
+            app.is_running(),
+            "susie exited while typing symbols\n{}",
+            app.stderr()
+        );
+        thread::sleep(Duration::from_millis(300));
+        capture(sway, &shot_path);
+        let text = recognize_block(&shot_path);
+        let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+        // `.` が Delete、 `$` が Home、 `%` が Left だと、この並びにはならない。
+        if compact.contains("susie.$%") {
+            return;
+        }
+        last = text;
+    }
+    panic!(
+        "the field did not keep susie and the symbols\n{last}\n{}",
         app.stderr()
     );
 }
@@ -772,11 +801,19 @@ fn capture(sway: &Sway, dest: &Path) {
 }
 
 fn recognize(path: &Path) -> String {
+    recognize_with(path, "11")
+}
+
+fn recognize_block(path: &Path) -> String {
+    recognize_with(path, "6")
+}
+
+fn recognize_with(path: &Path, psm: &str) -> String {
     let output = Command::new("tesseract")
         .arg(path)
         .arg("stdout")
         .arg("--psm")
-        .arg("11")
+        .arg(psm)
         .output()
         .expect("run tesseract");
     assert!(
