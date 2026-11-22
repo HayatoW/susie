@@ -249,6 +249,10 @@ pub struct App {
 
 impl App {
     pub fn spawn(sway: &Sway) -> Self {
+        Self::spawn_with(sway, &[])
+    }
+
+    pub fn spawn_with(sway: &Sway, args: &[&str]) -> Self {
         assert!(
             Path::new(LAVAPIPE_ICD).is_file(),
             "lavapipe ICD is missing at {LAVAPIPE_ICD}"
@@ -256,6 +260,7 @@ impl App {
         let stderr_path =
             PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-app.stderr", sway.name));
         let child = Command::new(env!("CARGO_BIN_EXE_susie"))
+            .args(args)
             .env("XDG_RUNTIME_DIR", &sway.runtime)
             .env("WAYLAND_DISPLAY", &sway.display)
             .env("VK_ICD_FILENAMES", LAVAPIPE_ICD)
