@@ -7,8 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use harness::{
-    App, MetricsFile, Pointer, Recording, Sway, assert_playable, capture, extract_frame, input_ms,
-    metric_lines, publish, recognize, require_word, transcode, wait_until_ready,
+    App, MetricsFile, Pointer, Recording, Sway, assert_playable, capture, extract_frame,
+    input_ms_since, metric_lines, publish, recognize, require_word, transcode, wait_until_ready,
 };
 
 const EVIDENCE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/evidence/S13");
@@ -24,7 +24,7 @@ fn click_records_input_ms() {
     let top = shot("s13-top.png");
     wait_until_ready(&sway, &mut app, before, &top, "click");
     assert!(
-        input_ms().is_none(),
+        input_ms_since(before).is_none(),
         "input_ms was recorded before the page press"
     );
     // 最初の configure が遅れて届くと、ウィンドウが出力いっぱいに戻る。
@@ -33,7 +33,7 @@ fn click_records_input_ms() {
     thread::sleep(Duration::from_millis(300));
     let mut recording = Recording::start(&sway);
     thread::sleep(Duration::from_millis(500));
-    click_once(&sway, &mut app);
+    click_once(&sway, &mut app, before);
     thread::sleep(Duration::from_millis(700));
     let raw = recording.stop();
     let video = shot("s13-click.mp4");
@@ -51,7 +51,7 @@ fn click_records_input_ms() {
         "the recording did not show susie-clicked: {late_text:?}"
     );
     assert!(
-        input_ms().is_some(),
+        input_ms_since(before).is_some(),
         "the launch dropped input_ms before the window closed"
     );
     publish(&video, &Path::new(EVIDENCE_DIR).join("click.mp4"));
@@ -71,7 +71,7 @@ fn click_records_input_ms() {
     metrics.keep_new_line();
 }
 
-fn click_once(sway: &Sway, app: &mut App) {
+fn click_once(sway: &Sway, app: &mut App, before: usize) {
     let deadline = Instant::now() + CLICK_DEADLINE;
     let shot_path = shot("s13-click.png");
     // 押し直すと、最初の押下から画素が変わるまでの時間が伸びる。1 回だけ押す。
@@ -82,7 +82,7 @@ fn click_once(sway: &Sway, app: &mut App) {
     // enter が GPUI に届いてからボタンを送る。先に送ると、面に入る前のボタンは捨てられる。
     thread::sleep(Duration::from_millis(200));
     assert!(
-        input_ms().is_none(),
+        input_ms_since(before).is_none(),
         "input_ms was recorded before the press was sent"
     );
     pointer.click();
@@ -96,10 +96,10 @@ fn click_once(sway: &Sway, app: &mut App) {
         thread::sleep(Duration::from_millis(200));
         capture(sway, &shot_path);
         let text = recognize(&shot_path);
-        if text.contains("susie-clicked") && input_ms().is_some() {
+        if text.contains("susie-clicked") && input_ms_since(before).is_some() {
             return;
         }
-        last = format!("input_ms {:?} text {text}", input_ms());
+        last = format!("input_ms {:?} text {text}", input_ms_since(before));
     }
     panic!(
         "susie-clicked and input_ms were not both recorded within {}s\n{last}\n{}",

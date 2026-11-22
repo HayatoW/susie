@@ -18,5 +18,6 @@ pub use media::{
 };
 #[allow(unused_imports)]
 pub use session::{
-    App, MetricsFile, SCREEN_HEIGHT, SCREEN_WIDTH, Spot, Sway, capture, input_ms, metric_lines,
+    App, MetricsFile, SCREEN_HEIGHT, SCREEN_WIDTH, Spot, Sway, capture, input_ms_since,
+    metric_lines,
 };

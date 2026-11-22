@@ -334,8 +334,9 @@ pub fn metric_lines() -> usize {
     lines_of_metrics().len()
 }
 
-pub fn input_ms() -> Option<u64> {
-    for line in lines_of_metrics() {
+/// `before` より前の行は、前の起動の計測なので見ない。
+pub fn input_ms_since(before: usize) -> Option<u64> {
+    for line in lines_of_metrics().into_iter().skip(before) {
         let value: Value = serde_json::from_str(&line).expect("metrics line is json");
         if let Some(input_ms) = value.get("input_ms").and_then(Value::as_u64) {
             return Some(input_ms);
