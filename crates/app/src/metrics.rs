@@ -132,6 +132,26 @@ impl InputLatency {
     }
 }
 
+/// 起動計測が書けるまでは、確定した入力の遅れを pending に残す。
+/// 返す組は、先に書く起動計測と、そのあとに書く入力の遅れ。
+pub fn take_lines(
+    sample: &mut Sampler,
+    pending: &mut Option<u64>,
+    now: Instant,
+    input_ms: Option<u64>,
+) -> (Option<Sample>, Option<u64>) {
+    if let Some(ms) = input_ms {
+        *pending = Some(ms);
+    }
+    let startup = sample.observe(now);
+    let input = if sample.finished() {
+        pending.take()
+    } else {
+        None
+    };
+    (startup, input)
+}
+
 pub fn append_sample(sample: Sample) -> std::io::Result<()> {
     append_line(&metrics_line(sample))
 }
@@ -243,5 +263,88 @@ mod tests {
         assert!(latency.see(true));
         assert!(!latency.cancel());
         assert_eq!(latency.present(start + Duration::from_millis(40)), Some(40));
+    }
+
+    #[test]
+    fn input_waits_until_startup_is_written() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let (startup, input) = take_lines(&mut sample, &mut pending, first, None);
+        assert!(startup.is_none() && input.is_none());
+
+        // 初回表示から 320 ミリ秒で、入力の遅れ 20 ミリ秒が先に確定する。
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_millis(320),
+            Some(20),
+        );
+        assert!(startup.is_none() && input.is_none());
+        assert_eq!(pending, Some(20));
+
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_secs(1),
+            None,
+        );
+        assert_eq!(
+            startup,
+            Some(Sample {
+                startup_ms: 40,
+                fps: 2
+            })
+        );
+        assert_eq!(input, Some(20));
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn input_on_the_startup_tick_stays_after_startup() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_secs(1),
+            Some(15),
+        );
+        assert_eq!(
+            startup,
+            Some(Sample {
+                startup_ms: 40,
+                fps: 1
+            })
+        );
+        assert_eq!(input, Some(15));
+    }
+
+    #[test]
+    fn input_after_startup_is_written_on_that_tick() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_secs(1),
+            None,
+        );
+        assert!(startup.is_some() && input.is_none());
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_millis(1500),
+            Some(30),
+        );
+        assert!(startup.is_none());
+        assert_eq!(input, Some(30));
     }
 }

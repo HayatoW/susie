@@ -46,6 +46,8 @@ pub struct Browser {
     retired: Option<Arc<RenderImage>>,
     sample: Sampler,
     input: InputLatency,
+    // 起動計測より先に確定した入力の遅れ。
+    held_input: Option<u64>,
     // 最初の左ボタン押下の時点で見えていたページ。
     input_baseline: Option<CpuFrame>,
 }
@@ -61,6 +63,7 @@ impl Browser {
             retired: None,
             sample: Sampler::new(started),
             input: InputLatency::new(),
+            held_input: None,
             input_baseline: None,
         }
     }
@@ -105,16 +108,25 @@ impl Browser {
                 window.on_next_frame(move |_window, cx| {
                     entity.update(cx, |this, _cx| {
                         let now = Instant::now();
-                        if let Some(sample) = this.sample.observe(now)
+                        let input_ms = this.input.present(now);
+                        if input_ms.is_some() {
+                            this.input_baseline = None;
+                        }
+                        let (sample, input_ms) = metrics::take_lines(
+                            &mut this.sample,
+                            &mut this.held_input,
+                            now,
+                            input_ms,
+                        );
+                        if let Some(sample) = sample
                             && let Err(err) = metrics::append_sample(sample)
                         {
                             eprintln!("計測を書けません。{err}");
                         }
-                        if let Some(input_ms) = this.input.present(now) {
-                            this.input_baseline = None;
-                            if let Err(err) = metrics::append_input_ms(input_ms) {
-                                eprintln!("計測を書けません。{err}");
-                            }
+                        if let Some(input_ms) = input_ms
+                            && let Err(err) = metrics::append_input_ms(input_ms)
+                        {
+                            eprintln!("計測を書けません。{err}");
                         }
                     });
                 });
