@@ -1,5 +1,5 @@
 //! ヘッドレス Sway でウィンドウを開き、仮想デバイスで操作し、録画する。
-//! S06 と S07 と S08 と S09 と S12 が、この 1 か所を使う。
+//! S06 と S07 と S08 と S09 と S12 と S13 が、この 1 か所を使う。
 //! 各テストが使う操作は違うので、使わない項目は未使用になる。
 #![allow(dead_code)]
 
@@ -18,5 +18,6 @@ pub use media::{
 };
 #[allow(unused_imports)]
 pub use session::{
-    App, MetricsFile, SCREEN_HEIGHT, SCREEN_WIDTH, Spot, Sway, capture, metric_lines,
+    App, MetricsFile, SCREEN_HEIGHT, SCREEN_WIDTH, Spot, Sway, capture, input_ms_since,
+    metric_lines,
 };

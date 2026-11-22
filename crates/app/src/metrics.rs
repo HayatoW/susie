@@ -35,6 +35,15 @@ impl Sampler {
         self.done
     }
 
+    /// 最初のフレームまでのミリ秒。1 秒の fps が終わる前でも分かる。
+    pub fn startup_ms(&self) -> Option<u64> {
+        let first = self.first?;
+        Some(
+            u64::try_from(first.duration_since(self.started).as_millis())
+                .expect("起動時間は u64 に収まる"),
+        )
+    }
+
     /// 最初のフレームから 1 秒未満に出したフレームを数える。境界のフレームは数に入れない。
     pub fn observe(&mut self, now: Instant) -> Option<Sample> {
         if self.done {
@@ -66,7 +75,136 @@ pub fn metrics_line(sample: Sample) -> String {
     )
 }
 
+pub fn input_line(input_ms: u64) -> String {
+    format!("{{\"input_ms\":{input_ms}}}")
+}
+
+/// 1 秒経つ前に閉じた起動の行。fps は無い。
+pub fn unfinished_startup_line(startup_ms: u64) -> String {
+    format!("{{\"startup_ms\":{startup_ms}}}")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EarlyClose {
+    pub startup_ms: u64,
+    pub input_ms: u64,
+}
+
+/// ページへ渡した最初の左ボタンの押下から、画素が変わったフレームを載せた時刻まで。
+/// 1 回の起動では最初の押下だけを覚える。アドレスバーのクリックは、ここへ来ない。
+#[derive(Debug)]
+pub struct InputLatency {
+    pressed: Option<Instant>,
+    // 画素が変わったフレームを、次の present で閉じる。
+    pending: bool,
+    done: bool,
+}
+
+impl InputLatency {
+    pub fn new() -> Self {
+        Self {
+            pressed: None,
+            pending: false,
+            done: false,
+        }
+    }
+
+    /// 最初の押下だけを覚える。覚えたときだけ true。
+    pub fn press(&mut self, now: Instant) -> bool {
+        if self.pressed.is_some() || self.done {
+            return false;
+        }
+        self.pressed = Some(now);
+        true
+    }
+
+    /// 押下のあとで画素が変わったフレームなら、次の present で閉じる。
+    pub fn see(&mut self, changed: bool) -> bool {
+        if self.done || self.pending || self.pressed.is_none() || !changed {
+            return false;
+        }
+        self.pending = true;
+        true
+    }
+
+    /// 画素が変わる前の別操作で、未確定の押下を捨てる。捨てたときだけ true。
+    /// その起動では、あとの押下も測らない。変わったフレームを待っている計測は残す。
+    pub fn cancel(&mut self) -> bool {
+        if self.done || self.pending || self.pressed.is_none() {
+            return false;
+        }
+        self.pressed = None;
+        self.done = true;
+        true
+    }
+
+    /// 変わったフレームを GPUI に載せた時刻で、押下からのミリ秒を返す。
+    pub fn present(&mut self, now: Instant) -> Option<u64> {
+        if !self.pending {
+            return None;
+        }
+        self.pending = false;
+        self.done = true;
+        let start = self.pressed.take()?;
+        let elapsed = u64::try_from(now.duration_since(start).as_millis())
+            .expect("入力の遅れは u64 に収まる");
+        Some(elapsed)
+    }
+}
+
+/// 起動計測が書けるまでは、確定した入力の遅れを pending に残す。
+/// 返す組は、先に書く起動計測と、そのあとに書く入力の遅れ。
+pub fn take_lines(
+    sample: &mut Sampler,
+    pending: &mut Option<u64>,
+    now: Instant,
+    input_ms: Option<u64>,
+) -> (Option<Sample>, Option<u64>) {
+    if let Some(ms) = input_ms {
+        *pending = Some(ms);
+    }
+    let startup = sample.observe(now);
+    let input = if sample.finished() {
+        pending.take()
+    } else {
+        None
+    };
+    (startup, input)
+}
+
+/// 1 秒が終わる前に閉じる。確定した入力があるときだけ、起動時間と入力の遅れを返す。
+/// フレーム数は返さない。起動計測が済んでいるときは何も返さない。
+pub fn take_early(sample: &Sampler, pending: &mut Option<u64>) -> Option<EarlyClose> {
+    if sample.finished() {
+        return None;
+    }
+    let input_ms = pending.take()?;
+    let startup_ms = sample
+        .startup_ms()
+        .expect("入力の遅れを保留したあとは最初のフレームがある");
+    Some(EarlyClose {
+        startup_ms,
+        input_ms,
+    })
+}
+
 pub fn append_sample(sample: Sample) -> std::io::Result<()> {
+    append_line(&metrics_line(sample))
+}
+
+pub fn append_input_ms(input_ms: u64) -> std::io::Result<()> {
+    append_line(&input_line(input_ms))
+}
+
+pub fn append_early(early: EarlyClose) -> std::io::Result<()> {
+    append_line(&format!(
+        "{}\n{}",
+        unfinished_startup_line(early.startup_ms),
+        input_line(early.input_ms)
+    ))
+}
+
+fn append_line(line: &str) -> std::io::Result<()> {
     let path = Path::new(METRICS_PATH);
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -74,7 +212,7 @@ pub fn append_sample(sample: Sample) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(file, "{}", metrics_line(sample))?;
+    writeln!(file, "{line}")?;
     Ok(())
 }
 
@@ -118,5 +256,196 @@ mod tests {
                 .observe(first + Duration::from_millis(1500))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn line_records_input_ms() {
+        assert_eq!(input_line(25), "{\"input_ms\":25}");
+    }
+
+    #[test]
+    fn first_press_closes_when_the_changed_frame_is_presented() {
+        let start = Instant::now();
+        let mut latency = InputLatency::new();
+        assert!(latency.press(start));
+        assert!(!latency.press(start + Duration::from_millis(30)));
+        assert!(!latency.see(false));
+        assert!(latency.present(start + Duration::from_millis(10)).is_none());
+        assert!(latency.see(true));
+        assert!(!latency.see(true));
+        assert_eq!(latency.present(start + Duration::from_millis(40)), Some(40));
+        assert!(latency.present(start + Duration::from_millis(80)).is_none());
+        assert!(!latency.press(start + Duration::from_millis(90)));
+        assert!(!latency.see(true));
+    }
+
+    #[test]
+    fn change_before_the_press_is_not_input() {
+        let start = Instant::now();
+        let mut latency = InputLatency::new();
+        assert!(!latency.see(true));
+        assert!(latency.present(start).is_none());
+    }
+
+    #[test]
+    fn cancel_before_a_changed_frame_drops_the_press() {
+        let start = Instant::now();
+        let mut latency = InputLatency::new();
+        assert!(latency.press(start));
+        assert!(latency.cancel());
+        assert!(!latency.cancel());
+        assert!(!latency.see(true));
+        assert!(latency.present(start + Duration::from_secs(3)).is_none());
+        assert!(!latency.press(start + Duration::from_secs(4)));
+    }
+
+    #[test]
+    fn cancel_after_the_changed_frame_keeps_the_press() {
+        let start = Instant::now();
+        let mut latency = InputLatency::new();
+        assert!(latency.press(start));
+        assert!(latency.see(true));
+        assert!(!latency.cancel());
+        assert_eq!(latency.present(start + Duration::from_millis(40)), Some(40));
+    }
+
+    #[test]
+    fn input_waits_until_startup_is_written() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let (startup, input) = take_lines(&mut sample, &mut pending, first, None);
+        assert!(startup.is_none() && input.is_none());
+
+        // 初回表示から 320 ミリ秒で、入力の遅れ 20 ミリ秒が先に確定する。
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_millis(320),
+            Some(20),
+        );
+        assert!(startup.is_none() && input.is_none());
+        assert_eq!(pending, Some(20));
+
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_secs(1),
+            None,
+        );
+        assert_eq!(
+            startup,
+            Some(Sample {
+                startup_ms: 40,
+                fps: 2
+            })
+        );
+        assert_eq!(input, Some(20));
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn input_on_the_startup_tick_stays_after_startup() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_secs(1),
+            Some(15),
+        );
+        assert_eq!(
+            startup,
+            Some(Sample {
+                startup_ms: 40,
+                fps: 1
+            })
+        );
+        assert_eq!(input, Some(15));
+    }
+
+    #[test]
+    fn input_after_startup_is_written_on_that_tick() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_secs(1),
+            None,
+        );
+        assert!(startup.is_some() && input.is_none());
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_millis(1500),
+            Some(30),
+        );
+        assert!(startup.is_none());
+        assert_eq!(input, Some(30));
+    }
+
+    #[test]
+    fn early_close_keeps_input_without_fps() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_millis(300),
+            Some(20),
+        );
+        assert!(startup.is_none() && input.is_none());
+        let early = take_early(&sample, &mut pending).expect("the held input is kept");
+        assert_eq!(
+            early,
+            EarlyClose {
+                startup_ms: 40,
+                input_ms: 20
+            }
+        );
+        assert_eq!(
+            unfinished_startup_line(early.startup_ms),
+            "{\"startup_ms\":40}"
+        );
+        assert_eq!(input_line(early.input_ms), "{\"input_ms\":20}");
+        assert!(take_early(&sample, &mut pending).is_none());
+    }
+
+    #[test]
+    fn early_close_without_input_writes_nothing() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        assert!(take_early(&sample, &mut pending).is_none());
+    }
+
+    #[test]
+    fn early_close_after_startup_does_not_repeat_input() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_secs(1),
+            Some(15),
+        );
+        assert!(startup.is_some() && input == Some(15));
+        assert!(take_early(&sample, &mut pending).is_none());
     }
 }

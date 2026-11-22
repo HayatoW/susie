@@ -11,7 +11,7 @@ use gpui::{
 
 use crate::address::{self, Address};
 use crate::click::{PageArea, PageClick, page_click};
-use crate::metrics::{self, Sampler};
+use crate::metrics::{self, InputLatency, Sampler};
 use crate::present::copied_image;
 use crate::scroll::{PageWheel, page_wheel};
 use crate::text::committed_text;
@@ -45,6 +45,11 @@ pub struct Browser {
     // 直前のフレームがサンプルした画像。次の tick までアトラスに残す。
     retired: Option<Arc<RenderImage>>,
     sample: Sampler,
+    input: InputLatency,
+    // 起動計測より先に確定した入力の遅れ。
+    held_input: Option<u64>,
+    // 最初の左ボタン押下の時点で見えていたページ。
+    input_baseline: Option<CpuFrame>,
 }
 
 impl Browser {
@@ -57,6 +62,24 @@ impl Browser {
             image: None,
             retired: None,
             sample: Sampler::new(started),
+            input: InputLatency::new(),
+            held_input: None,
+            input_baseline: None,
+        }
+    }
+
+    /// ページ上の最初の左ボタン押下を、入力の遅れの始まりにする。
+    fn arm_page_press(&mut self) {
+        if !self.input.press(Instant::now()) {
+            return;
+        }
+        self.input_baseline = self.latest.clone();
+    }
+
+    /// 画素が変わる前のスクロールでは、その描画を押下の遅れにしない。
+    fn drop_unsettled_press(&mut self) {
+        if self.input.cancel() {
+            self.input_baseline = None;
         }
     }
 
@@ -77,15 +100,32 @@ impl Browser {
             fresh
         };
         if let Some(frame) = present {
+            // 画素が変わったフレームも、起動のサンプルと同じく、次のフレームで載せた時刻を使う。
+            let changed = self.input.see(frame_differs(&self.input_baseline, &frame));
             self.replace_image(copied_image(&frame));
-            if measuring {
+            if measuring || changed {
                 let entity = cx.entity().clone();
                 window.on_next_frame(move |_window, cx| {
                     entity.update(cx, |this, _cx| {
-                        let Some(sample) = this.sample.observe(Instant::now()) else {
-                            return;
-                        };
-                        if let Err(err) = metrics::append_sample(sample) {
+                        let now = Instant::now();
+                        let input_ms = this.input.present(now);
+                        if input_ms.is_some() {
+                            this.input_baseline = None;
+                        }
+                        let (sample, input_ms) = metrics::take_lines(
+                            &mut this.sample,
+                            &mut this.held_input,
+                            now,
+                            input_ms,
+                        );
+                        if let Some(sample) = sample
+                            && let Err(err) = metrics::append_sample(sample)
+                        {
+                            eprintln!("計測を書けません。{err}");
+                        }
+                        if let Some(input_ms) = input_ms
+                            && let Err(err) = metrics::append_input_ms(input_ms)
+                        {
                             eprintln!("計測を書けません。{err}");
                         }
                     });
@@ -94,6 +134,15 @@ impl Browser {
         }
         // 計測のあとも CEF を回さないと、入力のあとの描画が届かない。
         window.request_animation_frame();
+    }
+
+    fn write_early_input(&mut self) {
+        let Some(early) = metrics::take_early(&self.sample, &mut self.held_input) else {
+            return;
+        };
+        if let Err(err) = metrics::append_early(early) {
+            eprintln!("計測を書けません。{err}");
+        }
     }
 
     fn replace_image(&mut self, image: Arc<RenderImage>) {
@@ -164,6 +213,7 @@ impl Browser {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, _cx| {
+                    this.arm_page_press();
                     this.address.blur_to_page();
                     window.focus(&this.page_focus);
                     click_page(
@@ -183,18 +233,28 @@ impl Browser {
                     );
                 }),
             )
-            .on_scroll_wheel(cx.listener(|_this, event: &ScrollWheelEvent, window, _cx| {
-                scroll_page(page_wheel(
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, _cx| {
+                let wheel = page_wheel(
                     event.position,
                     page_area(window.viewport_size()),
                     event.delta,
                     window.line_height(),
-                ));
+                );
+                if wheel.delta_x != 0 || wheel.delta_y != 0 {
+                    this.drop_unsettled_press();
+                }
+                scroll_page(wheel);
             }));
         if let Some(image) = self.image.clone() {
             page = page.child(img(image).size_full().object_fit(ObjectFit::Fill));
         }
         page
+    }
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        self.write_early_input();
     }
 }
 
@@ -224,6 +284,11 @@ fn page_area(viewport: Size<Pixels>) -> PageArea {
         origin: point(px(0.), bar),
         size: size(viewport.width, height),
     }
+}
+
+/// 押下の時点で見えていた画素と違うか。まだフレームが無い押下は、最初のフレームを違いにする。
+fn frame_differs(baseline: &Option<CpuFrame>, frame: &CpuFrame) -> bool {
+    baseline.as_ref().is_none_or(|shown| shown != frame)
 }
 
 fn poll_page() -> Option<CpuFrame> {
@@ -264,4 +329,29 @@ fn scroll_page(wheel: PageWheel) {
             page.scroll(wheel.x, wheel.y, wheel.delta_x, wheel.delta_y);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_pixels_are_not_a_change() {
+        let frame = CpuFrame::copy_bgra(1, 1, &[1, 2, 3, 4]).unwrap();
+        let again = CpuFrame::copy_bgra(1, 1, &[1, 2, 3, 4]).unwrap();
+        assert!(!frame_differs(&Some(frame), &again));
+    }
+
+    #[test]
+    fn different_pixels_are_a_change() {
+        let frame = CpuFrame::copy_bgra(1, 1, &[1, 2, 3, 4]).unwrap();
+        let next = CpuFrame::copy_bgra(1, 1, &[9, 2, 3, 4]).unwrap();
+        assert!(frame_differs(&Some(frame), &next));
+    }
+
+    #[test]
+    fn a_press_before_any_frame_treats_the_first_frame_as_a_change() {
+        let frame = CpuFrame::copy_bgra(1, 1, &[1, 2, 3, 4]).unwrap();
+        assert!(frame_differs(&None, &frame));
+    }
 }
