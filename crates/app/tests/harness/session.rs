@@ -49,21 +49,24 @@ impl MetricsFile {
         }
     }
 
-    // 起動が足した 1 行を残す。呼ばなければ、 Drop が計測ファイルを起動前へ戻す。
+    // 起動が足した行を残す。呼ばなければ、 Drop が計測ファイルを起動前へ戻す。
+    // 最初の行は startup_ms と fps。ページの左クリックを渡した起動は、そのあとに input_ms が 1 行ある。
     pub fn keep_new_line(&mut self) {
         let lines = lines_of_metrics();
         let original_count = String::from_utf8_lossy(&self.original)
             .lines()
             .filter(|line| !line.is_empty())
             .count();
-        assert_eq!(
-            lines.len(),
-            original_count + 1,
-            "this launch should append one metrics line"
+        let added = lines.len().saturating_sub(original_count);
+        assert!(
+            added == 1 || added == 2,
+            "this launch should append startup metrics, and input_ms only after a page press: {lines:?}"
         );
-        let line = &lines[original_count];
-        assert_metric(line);
-        self.kept = Some(line.clone());
+        assert_metric(&lines[original_count]);
+        if added == 2 {
+            assert_input(&lines[original_count + 1]);
+        }
+        self.kept = Some(lines[original_count..].join("\n"));
     }
 }
 
@@ -331,6 +334,16 @@ pub fn metric_lines() -> usize {
     lines_of_metrics().len()
 }
 
+pub fn input_ms() -> Option<u64> {
+    for line in lines_of_metrics() {
+        let value: Value = serde_json::from_str(&line).expect("metrics line is json");
+        if let Some(input_ms) = value.get("input_ms").and_then(Value::as_u64) {
+            return Some(input_ms);
+        }
+    }
+    None
+}
+
 pub(crate) fn lines_of_metrics() -> Vec<String> {
     let path = Path::new(METRICS_PATH);
     if !path.exists() {
@@ -353,6 +366,14 @@ pub(crate) fn assert_metric(line: &str) {
     assert!(
         fps.is_some_and(|fps| fps >= 1),
         "fps did not count a frame: {line}"
+    );
+}
+
+pub(crate) fn assert_input(line: &str) {
+    let value: Value = serde_json::from_str(line).expect("input line is json");
+    assert!(
+        value.get("input_ms").and_then(Value::as_u64).is_some(),
+        "input_ms is missing from {line}"
     );
 }
 
