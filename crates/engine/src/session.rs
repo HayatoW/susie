@@ -222,6 +222,25 @@ impl Page {
         }
     }
 
+    /// 今のページを、この URL へ移す。
+    /// 戻る、進む、再読み込みの状態は扱わない。
+    pub fn load(&mut self, url: &str) {
+        let browser = self.state.browser.borrow().clone();
+        let Some(browser) = browser else {
+            return;
+        };
+        let Some(frame) = browser.main_frame() else {
+            return;
+        };
+        *self.state.url.borrow_mut() = url.to_string();
+        // 読み込みが終わるまで途中の描画は出さない。
+        // 終わったあとは、最初のページと同じく invalidate で描き直す。
+        self.state.loaded.set(false);
+        self.state.nudged.set(false);
+        let target = CefString::from(url);
+        frame.load_url(Some(&target));
+    }
+
     /// ウィンドウ上のホイールを、ページのこの位置へ渡す。
     pub fn scroll(&mut self, x: i32, y: i32, delta_x: i32, delta_y: i32) {
         if delta_x == 0 && delta_y == 0 {
