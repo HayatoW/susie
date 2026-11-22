@@ -66,7 +66,70 @@ pub fn metrics_line(sample: Sample) -> String {
     )
 }
 
+pub fn input_line(input_ms: u64) -> String {
+    format!("{{\"input_ms\":{input_ms}}}")
+}
+
+/// ページへ渡した最初の左ボタンの押下から、画素が変わったフレームを載せた時刻まで。
+/// 1 回の起動では最初の押下だけを覚える。アドレスバーのクリックは、ここへ来ない。
+#[derive(Debug)]
+pub struct InputLatency {
+    pressed: Option<Instant>,
+    // 画素が変わったフレームを、次の present で閉じる。
+    pending: bool,
+    done: bool,
+}
+
+impl InputLatency {
+    pub fn new() -> Self {
+        Self {
+            pressed: None,
+            pending: false,
+            done: false,
+        }
+    }
+
+    /// 最初の押下だけを覚える。覚えたときだけ true。
+    pub fn press(&mut self, now: Instant) -> bool {
+        if self.pressed.is_some() || self.done {
+            return false;
+        }
+        self.pressed = Some(now);
+        true
+    }
+
+    /// 押下のあとで画素が変わったフレームなら、次の present で閉じる。
+    pub fn see(&mut self, changed: bool) -> bool {
+        if self.done || self.pending || self.pressed.is_none() || !changed {
+            return false;
+        }
+        self.pending = true;
+        true
+    }
+
+    /// 変わったフレームを GPUI に載せた時刻で、押下からのミリ秒を返す。
+    pub fn present(&mut self, now: Instant) -> Option<u64> {
+        if !self.pending {
+            return None;
+        }
+        self.pending = false;
+        self.done = true;
+        let start = self.pressed.take()?;
+        let elapsed = u64::try_from(now.duration_since(start).as_millis())
+            .expect("入力の遅れは u64 に収まる");
+        Some(elapsed)
+    }
+}
+
 pub fn append_sample(sample: Sample) -> std::io::Result<()> {
+    append_line(&metrics_line(sample))
+}
+
+pub fn append_input_ms(input_ms: u64) -> std::io::Result<()> {
+    append_line(&input_line(input_ms))
+}
+
+fn append_line(line: &str) -> std::io::Result<()> {
     let path = Path::new(METRICS_PATH);
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -74,7 +137,7 @@ pub fn append_sample(sample: Sample) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(file, "{}", metrics_line(sample))?;
+    writeln!(file, "{line}")?;
     Ok(())
 }
 
@@ -118,5 +181,34 @@ mod tests {
                 .observe(first + Duration::from_millis(1500))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn line_records_input_ms() {
+        assert_eq!(input_line(25), "{\"input_ms\":25}");
+    }
+
+    #[test]
+    fn first_press_closes_when_the_changed_frame_is_presented() {
+        let start = Instant::now();
+        let mut latency = InputLatency::new();
+        assert!(latency.press(start));
+        assert!(!latency.press(start + Duration::from_millis(30)));
+        assert!(!latency.see(false));
+        assert!(latency.present(start + Duration::from_millis(10)).is_none());
+        assert!(latency.see(true));
+        assert!(!latency.see(true));
+        assert_eq!(latency.present(start + Duration::from_millis(40)), Some(40));
+        assert!(latency.present(start + Duration::from_millis(80)).is_none());
+        assert!(!latency.press(start + Duration::from_millis(90)));
+        assert!(!latency.see(true));
+    }
+
+    #[test]
+    fn change_before_the_press_is_not_input() {
+        let start = Instant::now();
+        let mut latency = InputLatency::new();
+        assert!(!latency.see(true));
+        assert!(latency.present(start).is_none());
     }
 }
