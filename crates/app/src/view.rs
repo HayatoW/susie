@@ -73,6 +73,13 @@ impl Browser {
         self.input_baseline = self.latest.clone();
     }
 
+    /// 画素が変わる前のスクロールでは、その描画を押下の遅れにしない。
+    fn drop_unsettled_press(&mut self) {
+        if self.input.cancel() {
+            self.input_baseline = None;
+        }
+    }
+
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // draw は、今回の送信のあとで、前回の GPU 完了を待つ。
         // その待ちが終わった次の tick で、前回使った画像を外す。
@@ -205,13 +212,17 @@ impl Browser {
                     );
                 }),
             )
-            .on_scroll_wheel(cx.listener(|_this, event: &ScrollWheelEvent, window, _cx| {
-                scroll_page(page_wheel(
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, _cx| {
+                let wheel = page_wheel(
                     event.position,
                     page_area(window.viewport_size()),
                     event.delta,
                     window.line_height(),
-                ));
+                );
+                if wheel.delta_x != 0 || wheel.delta_y != 0 {
+                    this.drop_unsettled_press();
+                }
+                scroll_page(wheel);
             }));
         if let Some(image) = self.image.clone() {
             page = page.child(img(image).size_full().object_fit(ObjectFit::Fill));

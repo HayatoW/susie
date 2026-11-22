@@ -107,6 +107,17 @@ impl InputLatency {
         true
     }
 
+    /// 画素が変わる前の別操作で、未確定の押下を捨てる。捨てたときだけ true。
+    /// その起動では、あとの押下も測らない。変わったフレームを待っている計測は残す。
+    pub fn cancel(&mut self) -> bool {
+        if self.done || self.pending || self.pressed.is_none() {
+            return false;
+        }
+        self.pressed = None;
+        self.done = true;
+        true
+    }
+
     /// 変わったフレームを GPUI に載せた時刻で、押下からのミリ秒を返す。
     pub fn present(&mut self, now: Instant) -> Option<u64> {
         if !self.pending {
@@ -210,5 +221,27 @@ mod tests {
         let mut latency = InputLatency::new();
         assert!(!latency.see(true));
         assert!(latency.present(start).is_none());
+    }
+
+    #[test]
+    fn cancel_before_a_changed_frame_drops_the_press() {
+        let start = Instant::now();
+        let mut latency = InputLatency::new();
+        assert!(latency.press(start));
+        assert!(latency.cancel());
+        assert!(!latency.cancel());
+        assert!(!latency.see(true));
+        assert!(latency.present(start + Duration::from_secs(3)).is_none());
+        assert!(!latency.press(start + Duration::from_secs(4)));
+    }
+
+    #[test]
+    fn cancel_after_the_changed_frame_keeps_the_press() {
+        let start = Instant::now();
+        let mut latency = InputLatency::new();
+        assert!(latency.press(start));
+        assert!(latency.see(true));
+        assert!(!latency.cancel());
+        assert_eq!(latency.present(start + Duration::from_millis(40)), Some(40));
     }
 }
