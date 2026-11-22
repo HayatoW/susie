@@ -1,4 +1,5 @@
 mod click;
+mod launch;
 mod metrics;
 mod present;
 mod scroll;
@@ -26,8 +27,27 @@ fn main() {
         }
     }
 
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/first-page.html");
-    let page = match engine::Page::open(&fixture) {
+    // CEF の子プロセスは、起動引数の URL に加えて --type を持つ。
+    // ここはブラウザプロセスだけが通り、子プロセスは上で終わっている。
+    let url = match launch::startup_page(std::env::args().skip(1)) {
+        Ok(launch::StartupPage::Url(url)) => url,
+        Ok(launch::StartupPage::Fixture) => {
+            let fixture =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/first-page.html");
+            match engine::file_url(&fixture) {
+                Ok(url) => url,
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(2);
+        }
+    };
+    let page = match engine::Page::open(&url) {
         Ok(engine::Opened::Page(page)) => page,
         Ok(engine::Opened::Subprocess { exit_code }) => std::process::exit(exit_code),
         Err(err) => {

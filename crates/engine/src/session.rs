@@ -141,7 +141,7 @@ pub struct Page {
 }
 
 impl Page {
-    pub fn open(fixture: &Path) -> Result<Opened, SessionError> {
+    pub fn open(url: &str) -> Result<Opened, SessionError> {
         let BrowserBoot {
             args,
             mut app,
@@ -151,7 +151,7 @@ impl Page {
             Boot::Browser(browser) => browser,
         };
 
-        *state.url.borrow_mut() = file_url(fixture)?;
+        *state.url.borrow_mut() = url.to_string();
         let resources = resource_dir()?;
         let cache = cache_dir()?;
         let settings = Settings {
@@ -252,7 +252,8 @@ impl Page {
 }
 
 pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
-    let page = match Page::open(fixture)? {
+    let url = file_url(fixture)?;
+    let page = match Page::open(&url)? {
         Opened::Subprocess { exit_code } => return Ok(Rendered::Subprocess { exit_code }),
         Opened::Page(page) => page,
     };
@@ -376,7 +377,7 @@ fn close_browser(state: &State) {
     }
 }
 
-fn file_url(path: &Path) -> Result<String, SessionError> {
+pub fn file_url(path: &Path) -> Result<String, SessionError> {
     let absolute = path.canonicalize().map_err(SessionError::Io)?;
     let text = absolute.to_str().ok_or(SessionError::Setup(
         "フィクスチャのパスが UTF-8 ではありません",
