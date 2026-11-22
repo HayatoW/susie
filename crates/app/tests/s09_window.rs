@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use harness::{App, MetricsFile, Sway, capture, publish, recognize_block};
 
-// example.com は IANA が文書例として維持するページで、見出しは Example Domain のまま変わらない。
-const EXAMPLE_URL: &str = "https://example.com";
+// RFC 2606 は発行後に本文が変わらない。先頭に番号と題名が出る。
+const PAGE_URL: &str = "https://www.rfc-editor.org/rfc/rfc2606.txt";
+const PAGE_MARK: &str = "reserved top level dns names";
 const EVIDENCE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/evidence/S09");
 const PAGE_DEADLINE: Duration = Duration::from_secs(120);
 
@@ -19,27 +20,27 @@ fn argument_url_is_visible_and_no_argument_opens_the_fixture() {
     let _metrics = MetricsFile::save();
     let sway = Sway::start("s09");
 
-    let mut app = App::spawn_with(&sway, &[EXAMPLE_URL]);
-    let site = shot("s09-example.png");
-    wait_until_page(&sway, &mut app, &site, "example domain", "susie-top");
+    let mut app = App::spawn_with(&sway, &[PAGE_URL]);
+    let site = shot("s09-rfc.png");
+    wait_until_page(&sway, &mut app, &site, &["2606", PAGE_MARK], "susie-top");
     close_cleanly(&sway, &mut app);
 
     let mut app = App::spawn(&sway);
     let fixture = shot("s09-fixture.png");
-    wait_until_page(&sway, &mut app, &fixture, "susie-top", "example domain");
+    wait_until_page(&sway, &mut app, &fixture, &["susie-top"], PAGE_MARK);
     close_cleanly(&sway, &mut app);
 
     publish(&site, &Path::new(EVIDENCE_DIR).join("window.png"));
 }
 
-fn wait_until_page(sway: &Sway, app: &mut App, shot_path: &Path, present: &str, absent: &str) {
+fn wait_until_page(sway: &Sway, app: &mut App, shot_path: &Path, present: &[&str], absent: &str) {
     let deadline = Instant::now() + PAGE_DEADLINE;
     let mut placed = false;
     let mut last = String::new();
     while Instant::now() < deadline {
         assert!(
             app.is_running(),
-            "susie exited before {present} was visible\n{}",
+            "susie exited before {present:?} was visible\n{}",
             app.stderr()
         );
         if !sway.has_window(app.pid()) {
@@ -54,14 +55,14 @@ fn wait_until_page(sway: &Sway, app: &mut App, shot_path: &Path, present: &str, 
         }
         capture(sway, shot_path);
         let text = flat(&recognize_block(shot_path));
-        if text.contains(present) && !text.contains(absent) {
+        if present.iter().all(|phrase| text.contains(phrase)) && !text.contains(absent) {
             return;
         }
         last = text;
         thread::sleep(Duration::from_millis(200));
     }
     panic!(
-        "{present} was not visible within {}s\n{last}\n{}\n{}",
+        "{present:?} was not visible within {}s\n{last}\n{}\n{}",
         PAGE_DEADLINE.as_secs(),
         app.stderr(),
         sway.stderr()
