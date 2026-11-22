@@ -1,0 +1,10 @@
+[package]
+name = "nav-model"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+description = "ナビゲーションの状態遷移を検査する"
+
+[dependencies]
+stateright = "0.31"
