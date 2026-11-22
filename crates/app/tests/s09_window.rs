@@ -2,6 +2,7 @@
 
 mod harness;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,7 +31,38 @@ fn argument_url_is_visible_and_no_argument_opens_the_fixture() {
     wait_until_page(&sway, &mut app, &fixture, &["susie-top"], PAGE_MARK);
     close_cleanly(&sway, &mut app);
 
+    // 上端 200px は白い。見出しはその下で、表示範囲の中にある。
+    let lower = file_page("s09-lower.html", LOWER_PAGE);
+    let mut app = App::spawn_with(&sway, &[&lower]);
+    let lower_shot = shot("s09-lower.png");
+    wait_until_page(&sway, &mut app, &lower_shot, &["susie-lower"], "susie-top");
+    close_cleanly(&sway, &mut app);
+
     publish(&site, &Path::new(EVIDENCE_DIR).join("window.png"));
+}
+
+const LOWER_PAGE: &str = r#"<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #ffffff; color: #111111; font-family: "Noto Sans", sans-serif; }
+  .spacer { height: 200px; }
+  h1 { font-size: 72px; line-height: 1.1; margin: 0; padding: 32px; }
+</style>
+</head>
+<body>
+  <div class="spacer"></div>
+  <h1>susie-lower</h1>
+</body>
+</html>
+"#;
+
+fn file_page(name: &str, html: &str) -> String {
+    let path = shot(name);
+    fs::write(&path, html).expect("write the page");
+    let text = path.to_str().expect("page path is utf-8");
+    format!("file://{text}")
 }
 
 fn wait_until_page(sway: &Sway, app: &mut App, shot_path: &Path, present: &[&str], absent: &str) {
