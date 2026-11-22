@@ -141,7 +141,7 @@ pub struct Page {
 }
 
 impl Page {
-    pub fn open(fixture: &Path) -> Result<Opened, SessionError> {
+    pub fn open(url: &str) -> Result<Opened, SessionError> {
         let BrowserBoot {
             args,
             mut app,
@@ -151,7 +151,7 @@ impl Page {
             Boot::Browser(browser) => browser,
         };
 
-        *state.url.borrow_mut() = file_url(fixture)?;
+        *state.url.borrow_mut() = url.to_string();
         let resources = resource_dir()?;
         let cache = cache_dir()?;
         let settings = Settings {
@@ -252,7 +252,8 @@ impl Page {
 }
 
 pub fn render_fixture(fixture: &Path) -> Result<Rendered, SessionError> {
-    let page = match Page::open(fixture)? {
+    let url = file_url(fixture)?;
+    let page = match Page::open(&url)? {
         Opened::Subprocess { exit_code } => return Ok(Rendered::Subprocess { exit_code }),
         Opened::Page(page) => page,
     };
@@ -376,7 +377,7 @@ fn close_browser(state: &State) {
     }
 }
 
-fn file_url(path: &Path) -> Result<String, SessionError> {
+pub fn file_url(path: &Path) -> Result<String, SessionError> {
     let absolute = path.canonicalize().map_err(SessionError::Io)?;
     let text = absolute.to_str().ok_or(SessionError::Setup(
         "フィクスチャのパスが UTF-8 ではありません",
@@ -444,11 +445,48 @@ mod tests {
     fn control_character_is_not_a_key() {
         assert!(committed_char_events('\n').is_empty());
     }
+
+    #[test]
+    fn ink_below_the_top_band_is_in_the_view() {
+        let width = 200u32;
+        let height = 220u32;
+        let mut buf = white(width, height);
+        paint_dark(&mut buf, width, 0, 200, 80);
+        assert!(view_has_ink(&buf, width, height));
+    }
+
+    #[test]
+    fn ink_at_the_top_is_in_the_view() {
+        let width = 200u32;
+        let height = 220u32;
+        let mut buf = white(width, height);
+        paint_dark(&mut buf, width, 0, 10, 80);
+        assert!(view_has_ink(&buf, width, height));
+    }
+
+    #[test]
+    fn blank_view_has_no_ink() {
+        let buf = white(40, 40);
+        assert!(!view_has_ink(&buf, 40, 40));
+    }
+
+    fn white(width: u32, height: u32) -> Vec<u8> {
+        vec![255u8; (width as usize) * (height as usize) * 4]
+    }
+
+    fn paint_dark(buf: &mut [u8], width: u32, x: usize, y: usize, count: usize) {
+        for offset in 0..count {
+            let index = (y * width as usize + x + offset) * 4;
+            buf[index] = 0;
+            buf[index + 1] = 0;
+            buf[index + 2] = 0;
+        }
+    }
 }
 
-fn top_has_ink(bgra: &[u8], width: u32, height: u32) -> bool {
+fn view_has_ink(bgra: &[u8], width: u32, height: u32) -> bool {
     let width = width as usize;
-    let rows = (height as usize).min(180);
+    let rows = height as usize;
     let columns = width.saturating_sub(24);
     let mut dark = 0usize;
     for y in 0..rows {
@@ -702,10 +740,13 @@ wrap_render_handler! {
             if width as u32 != VIEW_WIDTH || height as u32 != VIEW_HEIGHT {
                 return;
             }
-            // 最初の 1 枚は上端の文字で確定する。そのあとは、スクロールで上端が空白でも受ける。
+            // 最初の 1 枚は、表示範囲のどこかに描画があるフレームにする。
+            // 上端だけを見ると、余白の下にある本文を捨てて白いままになる。
+            // 全体が白い描画はまだ確定しない。確定すると、その直後の本文を捨てる。
+            // そのあとは、スクロールで全体が空白でも受ける。
             if !self.state.delivered.get()
                 && (self.state.frame.borrow().is_some()
-                    || !top_has_ink(bytes, width as u32, height as u32))
+                    || !view_has_ink(bytes, width as u32, height as u32))
             {
                 return;
             }
