@@ -35,6 +35,15 @@ impl Sampler {
         self.done
     }
 
+    /// 最初のフレームまでのミリ秒。1 秒の fps が終わる前でも分かる。
+    pub fn startup_ms(&self) -> Option<u64> {
+        let first = self.first?;
+        Some(
+            u64::try_from(first.duration_since(self.started).as_millis())
+                .expect("起動時間は u64 に収まる"),
+        )
+    }
+
     /// 最初のフレームから 1 秒未満に出したフレームを数える。境界のフレームは数に入れない。
     pub fn observe(&mut self, now: Instant) -> Option<Sample> {
         if self.done {
@@ -68,6 +77,17 @@ pub fn metrics_line(sample: Sample) -> String {
 
 pub fn input_line(input_ms: u64) -> String {
     format!("{{\"input_ms\":{input_ms}}}")
+}
+
+/// 1 秒経つ前に閉じた起動の行。fps は無い。
+pub fn unfinished_startup_line(startup_ms: u64) -> String {
+    format!("{{\"startup_ms\":{startup_ms}}}")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EarlyClose {
+    pub startup_ms: u64,
+    pub input_ms: u64,
 }
 
 /// ページへ渡した最初の左ボタンの押下から、画素が変わったフレームを載せた時刻まで。
@@ -152,12 +172,36 @@ pub fn take_lines(
     (startup, input)
 }
 
+/// 1 秒が終わる前に閉じる。確定した入力があるときだけ、起動時間と入力の遅れを返す。
+/// フレーム数は返さない。起動計測が済んでいるときは何も返さない。
+pub fn take_early(sample: &Sampler, pending: &mut Option<u64>) -> Option<EarlyClose> {
+    if sample.finished() {
+        return None;
+    }
+    let input_ms = pending.take()?;
+    let startup_ms = sample
+        .startup_ms()
+        .expect("入力の遅れを保留したあとは最初のフレームがある");
+    Some(EarlyClose {
+        startup_ms,
+        input_ms,
+    })
+}
+
 pub fn append_sample(sample: Sample) -> std::io::Result<()> {
     append_line(&metrics_line(sample))
 }
 
 pub fn append_input_ms(input_ms: u64) -> std::io::Result<()> {
     append_line(&input_line(input_ms))
+}
+
+pub fn append_early(early: EarlyClose) -> std::io::Result<()> {
+    append_line(&format!(
+        "{}\n{}",
+        unfinished_startup_line(early.startup_ms),
+        input_line(early.input_ms)
+    ))
 }
 
 fn append_line(line: &str) -> std::io::Result<()> {
@@ -346,5 +390,62 @@ mod tests {
         );
         assert!(startup.is_none());
         assert_eq!(input, Some(30));
+    }
+
+    #[test]
+    fn early_close_keeps_input_without_fps() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_millis(300),
+            Some(20),
+        );
+        assert!(startup.is_none() && input.is_none());
+        let early = take_early(&sample, &mut pending).expect("the held input is kept");
+        assert_eq!(
+            early,
+            EarlyClose {
+                startup_ms: 40,
+                input_ms: 20
+            }
+        );
+        assert_eq!(
+            unfinished_startup_line(early.startup_ms),
+            "{\"startup_ms\":40}"
+        );
+        assert_eq!(input_line(early.input_ms), "{\"input_ms\":20}");
+        assert!(take_early(&sample, &mut pending).is_none());
+    }
+
+    #[test]
+    fn early_close_without_input_writes_nothing() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        assert!(take_early(&sample, &mut pending).is_none());
+    }
+
+    #[test]
+    fn early_close_after_startup_does_not_repeat_input() {
+        let started = Instant::now();
+        let mut sample = Sampler::new(started);
+        let mut pending = None;
+        let first = started + Duration::from_millis(40);
+        let _ = take_lines(&mut sample, &mut pending, first, None);
+        let (startup, input) = take_lines(
+            &mut sample,
+            &mut pending,
+            first + Duration::from_secs(1),
+            Some(15),
+        );
+        assert!(startup.is_some() && input == Some(15));
+        assert!(take_early(&sample, &mut pending).is_none());
     }
 }

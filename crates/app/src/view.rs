@@ -136,6 +136,15 @@ impl Browser {
         window.request_animation_frame();
     }
 
+    fn write_early_input(&mut self) {
+        let Some(early) = metrics::take_early(&self.sample, &mut self.held_input) else {
+            return;
+        };
+        if let Err(err) = metrics::append_early(early) {
+            eprintln!("計測を書けません。{err}");
+        }
+    }
+
     fn replace_image(&mut self, image: Arc<RenderImage>) {
         if let Some(previous) = self.image.replace(image) {
             // 今外すと、直前の draw がまだサンプルしているテクスチャを消す。
@@ -240,6 +249,12 @@ impl Browser {
             page = page.child(img(image).size_full().object_fit(ObjectFit::Fill));
         }
         page
+    }
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        self.write_early_input();
     }
 }
 
