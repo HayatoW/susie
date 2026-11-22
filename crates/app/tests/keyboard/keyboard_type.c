@@ -198,6 +198,19 @@ int main(int argc, char **argv) {
             return 1;
         }
         line[len - 1] = '\0';
+        // 1 バイトの SOH は Enter。打つ文字には使わない。
+        if (strcmp(line, "\x01") == 0) {
+            if (send_key(display, keyboard, 28, KEY_PRESSED) != 0) {
+                return 1;
+            }
+            usleep(80000);
+            if (send_key(display, keyboard, 28, KEY_RELEASED) != 0) {
+                return 1;
+            }
+            printf("ok\n");
+            fflush(stdout);
+            continue;
+        }
         for (char *cursor = line; *cursor; cursor++) {
             if (*cursor < 0x20 || *cursor > 0x7e) {
                 fprintf(stderr, "unsupported character\n");
