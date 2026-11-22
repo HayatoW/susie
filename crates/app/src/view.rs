@@ -4,15 +4,21 @@ use std::time::Instant;
 
 use engine::{CpuFrame, Page};
 use gpui::{
-    Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent,
-    ObjectFit, Render, RenderImage, ScrollWheelEvent, Window, div, img, prelude::*, rgb,
+    Context, Div, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseUpEvent, ObjectFit, Pixels, Render, RenderImage, ScrollWheelEvent, Size, Window, div, img,
+    point, prelude::*, px, rgb, size,
 };
 
-use crate::click::{PageClick, page_click};
+use crate::address::{self, Address};
+use crate::click::{PageArea, PageClick, page_click};
 use crate::metrics::{self, Sampler};
 use crate::present::copied_image;
 use crate::scroll::{PageWheel, page_wheel};
 use crate::text::committed_text;
+
+// 入力欄の文字は、録画でも読める大きさにする。
+const BAR_HEIGHT: f32 = 80.;
+const BAR_FONT: f32 = 48.;
 
 thread_local! {
     static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
@@ -31,7 +37,9 @@ pub fn close_page() {
 }
 
 pub struct Browser {
-    pub focus: FocusHandle,
+    pub page_focus: FocusHandle,
+    bar_focus: FocusHandle,
+    address: Address,
     latest: Option<CpuFrame>,
     image: Option<Arc<RenderImage>>,
     // 直前のフレームがサンプルした画像。次の tick までアトラスに残す。
@@ -40,9 +48,11 @@ pub struct Browser {
 }
 
 impl Browser {
-    pub fn new(started: Instant, cx: &mut Context<Self>) -> Self {
+    pub fn new(started: Instant, url: &str, cx: &mut Context<Self>) -> Self {
         Self {
-            focus: cx.focus_handle(),
+            page_focus: cx.focus_handle(),
+            bar_focus: cx.focus_handle(),
+            address: Address::new(url),
             latest: None,
             image: None,
             retired: None,
@@ -92,15 +102,59 @@ impl Browser {
             self.retired = Some(previous);
         }
     }
-}
 
-impl Render for Browser {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.tick(window, cx);
-        let mut root = div()
-            .track_focus(&self.focus)
-            .size_full()
+    fn address_bar(&self, cx: &mut Context<Self>) -> Div {
+        let mut bar = div()
+            .h(px(BAR_HEIGHT))
+            .w_full()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .px(px(20.))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .font_family("Noto Sans")
+            .text_size(px(BAR_FONT))
+            .text_color(rgb(0x111111))
             .bg(rgb(0xffffff))
+            .track_focus(&self.bar_focus)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _event: &MouseDownEvent, window, _cx| {
+                    this.address.focus_from_click();
+                    window.focus(&this.bar_focus);
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, _cx| {
+                let Some(key) = address::address_key(&event.keystroke) else {
+                    return;
+                };
+                if let Some(url) = this.address.on_key(key) {
+                    load_page(&url);
+                }
+            }));
+        let text = self.address.shown().to_string();
+        // クリックした入力欄は、選択かキャレットでキーの行き先が分かる。
+        if self.address.replaces() && !text.is_empty() {
+            bar = bar.child(div().bg(rgb(0xd6d6d6)).child(text));
+        } else {
+            if !text.is_empty() {
+                bar = bar.child(text);
+            }
+            if self.address.focused() {
+                bar = bar.child(div().w(px(2.)).h(px(BAR_FONT)).bg(rgb(0x111111)));
+            }
+        }
+        bar
+    }
+
+    fn page_surface(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let area = page_area(window.viewport_size());
+        let mut page = div()
+            .w(area.size.width)
+            .h(area.size.height)
+            .overflow_hidden()
+            .track_focus(&self.page_focus)
             .on_key_down(cx.listener(|_this, event: &KeyDownEvent, _window, _cx| {
                 let Some(text) = committed_text(&event.keystroke) else {
                     return;
@@ -109,9 +163,11 @@ impl Render for Browser {
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|_this, event: &MouseDownEvent, window, _cx| {
+                cx.listener(|this, event: &MouseDownEvent, window, _cx| {
+                    this.address.blur_to_page();
+                    window.focus(&this.page_focus);
                     click_page(
-                        page_click(event.position, window.viewport_size()),
+                        page_click(event.position, page_area(window.viewport_size())),
                         true,
                         event.click_count,
                     );
@@ -121,7 +177,7 @@ impl Render for Browser {
                 MouseButton::Left,
                 cx.listener(|_this, event: &MouseUpEvent, window, _cx| {
                     click_page(
-                        page_click(event.position, window.viewport_size()),
+                        page_click(event.position, page_area(window.viewport_size())),
                         false,
                         event.click_count,
                     );
@@ -130,20 +186,56 @@ impl Render for Browser {
             .on_scroll_wheel(cx.listener(|_this, event: &ScrollWheelEvent, window, _cx| {
                 scroll_page(page_wheel(
                     event.position,
-                    window.viewport_size(),
+                    page_area(window.viewport_size()),
                     event.delta,
                     window.line_height(),
                 ));
             }));
         if let Some(image) = self.image.clone() {
-            root = root.child(img(image).size_full().object_fit(ObjectFit::Fill));
+            page = page.child(img(image).size_full().object_fit(ObjectFit::Fill));
         }
-        root
+        page
+    }
+}
+
+impl Render for Browser {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.tick(window, cx);
+        let bar = self.address_bar(cx);
+        let page = self.page_surface(window, cx);
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(rgb(0xffffff))
+            .child(bar)
+            .child(page)
+    }
+}
+
+fn page_area(viewport: Size<Pixels>) -> PageArea {
+    let bar = px(BAR_HEIGHT);
+    let height = if viewport.height > bar {
+        viewport.height - bar
+    } else {
+        px(1.)
+    };
+    PageArea {
+        origin: point(px(0.), bar),
+        size: size(viewport.width, height),
     }
 }
 
 fn poll_page() -> Option<CpuFrame> {
     PAGE.with(|slot| slot.borrow_mut().as_mut().and_then(Page::poll))
+}
+
+fn load_page(url: &str) {
+    PAGE.with(|slot| {
+        if let Some(page) = slot.borrow_mut().as_mut() {
+            page.load(url);
+        }
+    });
 }
 
 fn click_page(click: PageClick, down: bool, click_count: usize) {

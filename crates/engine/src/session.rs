@@ -222,6 +222,22 @@ impl Page {
         }
     }
 
+    /// 今のページを、この URL へ移す。
+    /// 戻る、進む、再読み込みの状態は扱わない。
+    /// 描画はここでは止めない。同じ文書内の移動や、読み込みが始まる前に拒否された URL は、完了の通知が来ない。
+    pub fn load(&mut self, url: &str) {
+        let browser = self.state.browser.borrow().clone();
+        let Some(browser) = browser else {
+            return;
+        };
+        let Some(frame) = browser.main_frame() else {
+            return;
+        };
+        *self.state.url.borrow_mut() = url.to_string();
+        let target = CefString::from(url);
+        frame.load_url(Some(&target));
+    }
+
     /// ウィンドウ上のホイールを、ページのこの位置へ渡す。
     pub fn scroll(&mut self, x: i32, y: i32, delta_x: i32, delta_y: i32) {
         if delta_x == 0 && delta_y == 0 {
@@ -637,6 +653,24 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
+        fn on_load_start(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            _transition_type: TransitionType,
+        ) {
+            let Some(frame) = frame else {
+                return;
+            };
+            if frame.is_main() != 1 {
+                return;
+            }
+            // 新しい文書の読み込みが始まった。終わるまで途中の描画は出さない。
+            // 終わったあとは、最初のページと同じく invalidate で描き直す。
+            self.state.loaded.set(false);
+            self.state.nudged.set(false);
+        }
+
         fn on_load_end(
             &self,
             _browser: Option<&mut Browser>,

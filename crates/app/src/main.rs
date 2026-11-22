@@ -1,3 +1,4 @@
+mod address;
 mod click;
 mod launch;
 mod metrics;
@@ -85,9 +86,9 @@ fn main() {
                 ..Default::default()
             },
             move |window, cx| {
-                let browser = cx.new(|cx| Browser::new(started, cx));
-                // ルートの div がキーを受け取る。フォーカスがないと、キーはページへ届かない。
-                window.focus(&browser.read(cx).focus);
+                let browser = cx.new(|cx| Browser::new(started, &url, cx));
+                // 最初はページがキーを受け取る。入力欄は、そこをクリックしたときだけ受け取る。
+                window.focus(&browser.read(cx).page_focus);
                 browser
             },
         )

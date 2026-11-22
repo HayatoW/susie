@@ -12,6 +12,7 @@ use super::session::{self, App, SCREEN_HEIGHT, SCREEN_WIDTH, STARTUP_DEADLINE, S
 
 const MAX_VIDEO_BYTES: u64 = 10 * 1024 * 1024;
 
+#[derive(Debug)]
 pub struct Word {
     pub text: String,
     pub left: i32,
@@ -182,6 +183,13 @@ fn find_word(path: &Path, word: &str) -> Option<Word> {
     words(path, "11")
         .into_iter()
         .find(|found| found.text == word)
+}
+
+pub fn find_containing(path: &Path, needle: &str) -> Option<Word> {
+    let needle = needle.to_lowercase();
+    words(path, "11")
+        .into_iter()
+        .find(|found| found.text.contains(&needle))
 }
 
 fn words(path: &Path, psm: &str) -> Vec<Word> {

@@ -112,6 +112,12 @@ impl Keyboard {
         self.read_line("ok");
     }
 
+    pub fn press_enter(&mut self) {
+        writeln!(self.stdin, "\u{1}").expect("write enter");
+        self.stdin.flush().expect("flush enter");
+        self.read_line("ok");
+    }
+
     fn read_line(&mut self, expected: &str) {
         let mut line = String::new();
         let read = self.stdout.read_line(&mut line);
