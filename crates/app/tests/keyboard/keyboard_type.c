@@ -124,6 +124,23 @@ static int send_mods(struct wl_display *display, struct zwp_virtual_keyboard_v1 
     return 0;
 }
 
+// 修飾キーは押さず、マスクだけを渡す。文字の shift と同じ経路。
+static int chord(struct wl_display *display, struct zwp_virtual_keyboard_v1 *keyboard,
+                 uint32_t mask, uint32_t key) {
+    if (send_mods(display, keyboard, mask) != 0) {
+        return -1;
+    }
+    if (send_key(display, keyboard, key, KEY_PRESSED) != 0) {
+        return -1;
+    }
+    usleep(80000);
+    int released = send_key(display, keyboard, key, KEY_RELEASED);
+    if (send_mods(display, keyboard, 0) != 0) {
+        return -1;
+    }
+    return released;
+}
+
 static int type_char(struct wl_display *display, struct zwp_virtual_keyboard_v1 *keyboard,
                      struct xkb_keymap *keymap, uint32_t shift_mask, char ch) {
     uint32_t key = 0;
@@ -187,6 +204,14 @@ int main(int argc, char **argv) {
         return 1;
     }
     uint32_t shift_mask = 1u << shift;
+    xkb_mod_index_t alt = xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_ALT);
+    xkb_mod_index_t ctrl = xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_CTRL);
+    if (alt == XKB_MOD_INVALID || ctrl == XKB_MOD_INVALID) {
+        fprintf(stderr, "alt or ctrl modifier missing\n");
+        return 1;
+    }
+    uint32_t alt_mask = 1u << alt;
+    uint32_t ctrl_mask = 1u << ctrl;
     printf("ready\n");
     fflush(stdout);
 
@@ -205,6 +230,30 @@ int main(int argc, char **argv) {
             }
             usleep(80000);
             if (send_key(display, keyboard, 28, KEY_RELEASED) != 0) {
+                return 1;
+            }
+            printf("ok\n");
+            fflush(stdout);
+            continue;
+        }
+        // evdev のキーコード。左は 105、右は 106、 R は 19、 L は 38。
+        uint32_t mask = 0;
+        uint32_t key = 0;
+        if (strcmp(line, "alt-left") == 0) {
+            mask = alt_mask;
+            key = 105;
+        } else if (strcmp(line, "alt-right") == 0) {
+            mask = alt_mask;
+            key = 106;
+        } else if (strcmp(line, "ctrl-r") == 0) {
+            mask = ctrl_mask;
+            key = 19;
+        } else if (strcmp(line, "ctrl-l") == 0) {
+            mask = ctrl_mask;
+            key = 38;
+        }
+        if (mask != 0) {
+            if (chord(display, keyboard, mask, key) != 0) {
                 return 1;
             }
             printf("ok\n");
