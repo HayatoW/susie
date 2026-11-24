@@ -7,6 +7,7 @@ use cef::args::Args;
 use cef::*;
 
 use crate::frame::{CpuFrame, Frame as PresentedFrame, VIEW_HEIGHT, VIEW_WIDTH};
+use crate::load::{LoadNotice, Loads, NavEvent};
 
 const PAINT_TIMEOUT: Duration = Duration::from_secs(90);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -59,6 +60,8 @@ struct State {
     frame: RefCell<Option<CpuFrame>>,
     failure: RefCell<Option<String>>,
     browser: RefCell<Option<Browser>>,
+    loads: RefCell<Loads>,
+    nav_events: RefCell<Vec<NavEvent>>,
 }
 
 impl State {
@@ -74,6 +77,8 @@ impl State {
             frame: RefCell::new(None),
             failure: RefCell::new(None),
             browser: RefCell::new(None),
+            loads: RefCell::new(Loads::new()),
+            nav_events: RefCell::new(Vec::new()),
         }
     }
 
@@ -152,6 +157,7 @@ impl Page {
         };
 
         *state.url.borrow_mut() = url.to_string();
+        state.loads.borrow_mut().request();
         let resources = resource_dir()?;
         let cache = cache_dir()?;
         let settings = Settings {
@@ -222,20 +228,38 @@ impl Page {
         }
     }
 
-    /// 今のページを、この URL へ移す。
-    /// 戻る、進む、再読み込みの状態は扱わない。
-    /// 描画はここでは止めない。同じ文書内の移動や、読み込みが始まる前に拒否された URL は、完了の通知が来ない。
-    pub fn load(&mut self, url: &str) {
-        let browser = self.state.browser.borrow().clone();
-        let Some(browser) = browser else {
-            return;
-        };
-        let Some(frame) = browser.main_frame() else {
-            return;
+    /// 今のページを、この URL へ移す。戻した番号が、この読み込みの番号。
+    /// ブラウザがまだ無いときは None で、読み込みは始まらない。
+    /// 描画はここでは止めない。フラグメントだけの移動は、ここで成功にする。CEF は開始も終了も送らない。
+    pub fn load(&mut self, url: &str) -> Option<u64> {
+        let browser = self.state.browser.borrow().clone()?;
+        let frame = browser.main_frame()?;
+        let current = CefString::from(&frame.url()).to_string();
+        let fragment = Loads::is_fragment_move(&current, url);
+        let generation = if fragment {
+            self.state.loads.borrow_mut().fragment_move()
+        } else {
+            self.state.loads.borrow_mut().request()
         };
         *self.state.url.borrow_mut() = url.to_string();
         let target = CefString::from(url);
         frame.load_url(Some(&target));
+        if fragment {
+            self.state
+                .nav_events
+                .borrow_mut()
+                .push(NavEvent::Succeeded { generation });
+        }
+        Some(generation)
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.state.loads.borrow().issued()
+    }
+
+    /// `poll` までに届いた、読み込みの結果。
+    pub fn take_nav(&mut self) -> Vec<NavEvent> {
+        std::mem::take(&mut *self.state.nav_events.borrow_mut())
     }
 
     /// ウィンドウ上のホイールを、ページのこの位置へ渡す。
@@ -383,6 +407,33 @@ fn key_event(type_: KeyEventType, windows_key_code: i32, character: u16) -> KeyE
         character,
         unmodified_character: character,
         ..KeyEvent::default()
+    }
+}
+
+fn note_main_load(state: &State, notice: LoadNotice, url: Option<String>) {
+    let effect = state.loads.borrow_mut().notice(notice, url.as_deref());
+    let mut events = state.nav_events.borrow_mut();
+    match effect {
+        crate::load::LoadEffect::None => {}
+        crate::load::LoadEffect::PageOpened { generation } => {
+            events.push(NavEvent::PageOpened {
+                generation,
+                url: url.unwrap_or_default(),
+            });
+        }
+        crate::load::LoadEffect::Succeeded { generation } => {
+            events.push(NavEvent::Succeeded { generation });
+        }
+        crate::load::LoadEffect::Failed { generation } => {
+            events.push(NavEvent::Failed { generation });
+        }
+        crate::load::LoadEffect::FailedOpen { generation } => {
+            let Some(url) = url.filter(|url| !url.is_empty()) else {
+                return;
+            };
+            events.push(NavEvent::PageOpened { generation, url });
+            events.push(NavEvent::Failed { generation });
+        }
     }
 }
 
@@ -669,6 +720,8 @@ wrap_load_handler! {
             // 終わったあとは、最初のページと同じく invalidate で描き直す。
             self.state.loaded.set(false);
             self.state.nudged.set(false);
+            let url = CefString::from(&frame.url()).to_string();
+            note_main_load(&self.state, LoadNotice::Start, Some(url));
         }
 
         fn on_load_end(
@@ -680,9 +733,11 @@ wrap_load_handler! {
             let Some(frame) = frame else {
                 return;
             };
-            if frame.is_main() == 1 {
-                self.state.loaded.set(true);
+            if frame.is_main() != 1 {
+                return;
             }
+            self.state.loaded.set(true);
+            note_main_load(&self.state, LoadNotice::End, None);
         }
 
         fn on_load_error(
@@ -701,6 +756,13 @@ wrap_load_handler! {
             let url = failed_url.map(CefString::to_string).unwrap_or_default();
             *self.state.failure.borrow_mut() =
                 Some(format!("読み込みに失敗しました。{error_code:?} {text} {url}"));
+            note_main_load(
+                &self.state,
+                LoadNotice::Error {
+                    aborted: error_code == Errorcode::ABORTED,
+                },
+                Some(url),
+            );
         }
     }
 }

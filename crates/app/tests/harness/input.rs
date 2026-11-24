@@ -118,6 +118,28 @@ impl Keyboard {
         self.read_line("ok");
     }
 
+    pub fn alt_left(&mut self) {
+        self.command("alt-left");
+    }
+
+    pub fn alt_right(&mut self) {
+        self.command("alt-right");
+    }
+
+    pub fn ctrl_r(&mut self) {
+        self.command("ctrl-r");
+    }
+
+    pub fn ctrl_l(&mut self) {
+        self.command("ctrl-l");
+    }
+
+    fn command(&mut self, name: &str) {
+        writeln!(self.stdin, "{name}").expect("write a shortcut");
+        self.stdin.flush().expect("flush a shortcut");
+        self.read_line("ok");
+    }
+
     fn read_line(&mut self, expected: &str) {
         let mut line = String::new();
         let read = self.stdout.read_line(&mut line);

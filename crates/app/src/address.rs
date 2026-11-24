@@ -1,6 +1,6 @@
 //! アドレスバーの文字列。
 //! 入力欄は 1 つで、 URL を打って Enter で開く。
-//! 検索、補完、履歴は持たない。フォーカスを移すショートカットも持たない。
+//! 検索、補完、履歴は持たない。フォーカスを移すキーは、この欄の外で割り当てる。
 
 use gpui::Keystroke;
 
@@ -52,6 +52,33 @@ impl Address {
         self.focused = true;
         self.replace = true;
         self.shown = self.opened.clone();
+    }
+
+    /// 移動で、開いている URL が変わった。
+    /// 未確定の下書きは残す。確定済みなら、表示を移動先に合わせる。
+    pub fn note_current(&mut self, url: &str) {
+        if self.opened == url {
+            return;
+        }
+        let editing = self.editing();
+        self.opened = url.to_string();
+        if !editing {
+            self.shown = self.opened.clone();
+        }
+    }
+
+    /// Ctrl+L。未確定の下書きは残す。そうでなければ、開いている URL を選択する。
+    pub fn focus_from_shortcut(&mut self) {
+        if self.editing() {
+            return;
+        }
+        self.focused = true;
+        self.replace = true;
+        self.shown = self.opened.clone();
+    }
+
+    fn editing(&self) -> bool {
+        self.focused && !self.replace && self.shown != self.opened
     }
 
     /// ページをクリックした。書きかけは捨てて、開いている URL に戻す。
@@ -217,6 +244,56 @@ mod tests {
         assert!(address.on_key(AddressKey::Enter).is_none());
         assert_eq!(address.shown(), "susie");
         assert_eq!(address.opened, "file:///tmp/frompage.html");
+    }
+
+    #[test]
+    fn navigation_updates_the_opened_url_unless_a_draft_is_in_progress() {
+        let mut address = address();
+        address.note_current("file:///tmp/next.html");
+        assert_eq!(address.shown(), "file:///tmp/next.html");
+        assert_eq!(address.opened, "file:///tmp/next.html");
+
+        address.focus_from_click();
+        address.on_key(AddressKey::Text("https://example.com".to_string()));
+        address.note_current("file:///tmp/other.html");
+        assert_eq!(address.shown(), "https://example.com");
+        assert_eq!(address.opened, "file:///tmp/other.html");
+        address.blur_to_page();
+        assert_eq!(address.shown(), "file:///tmp/other.html");
+    }
+
+    #[test]
+    fn submitted_url_follows_navigation_and_the_shortcut_selects_it() {
+        let mut address = address();
+        address.focus_from_click();
+        address.on_key(AddressKey::Text("https://example.com/b".to_string()));
+        assert!(address.on_key(AddressKey::Enter).is_some());
+        address.note_current("https://example.com/a");
+        assert_eq!(address.shown(), "https://example.com/a");
+        assert_eq!(address.opened, "https://example.com/a");
+        address.focus_from_shortcut();
+        assert!(address.replaces());
+        address.on_key(AddressKey::Text("https://example.com/c".to_string()));
+        assert_eq!(address.shown(), "https://example.com/c");
+    }
+
+    #[test]
+    fn shortcut_keeps_an_unsent_draft() {
+        let mut address = address();
+        address.focus_from_click();
+        address.on_key(AddressKey::Text("https://example.com".to_string()));
+        address.focus_from_shortcut();
+        assert_eq!(address.shown(), "https://example.com");
+        assert!(!address.replaces());
+    }
+
+    #[test]
+    fn navigation_replaces_a_fresh_selection() {
+        let mut address = address();
+        address.focus_from_click();
+        address.note_current("file:///tmp/next.html");
+        assert!(address.replaces());
+        assert_eq!(address.shown(), "file:///tmp/next.html");
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::{CpuFrame, Page};
+use engine::{CpuFrame, NavEvent, Page};
 use gpui::{
     Context, Div, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseUpEvent, ObjectFit, Pixels, Render, RenderImage, ScrollWheelEvent, Size, Window, div, img,
@@ -11,7 +11,9 @@ use gpui::{
 
 use crate::address::{self, Address};
 use crate::click::{PageArea, PageClick, page_click};
+use crate::keys::{self, Shortcut};
 use crate::metrics::{self, InputLatency, Sampler};
+use crate::nav::{History, Step};
 use crate::present::copied_image;
 use crate::scroll::{PageWheel, page_wheel};
 use crate::text::committed_text;
@@ -40,6 +42,7 @@ pub struct Browser {
     pub page_focus: FocusHandle,
     bar_focus: FocusHandle,
     address: Address,
+    nav: History,
     latest: Option<CpuFrame>,
     image: Option<Arc<RenderImage>>,
     // 直前のフレームがサンプルした画像。次の tick までアトラスに残す。
@@ -58,6 +61,10 @@ impl Browser {
             page_focus: cx.focus_handle(),
             bar_focus: cx.focus_handle(),
             address: Address::new(url),
+            nav: match installed_generation() {
+                Some(generation) => History::loading_first(url.to_string(), generation),
+                None => History::start(),
+            },
             latest: None,
             image: None,
             retired: None,
@@ -90,6 +97,7 @@ impl Browser {
             let _ = window.drop_image(retired);
         }
         let fresh = poll_page();
+        self.apply_nav();
         if let Some(frame) = fresh.clone() {
             self.latest = Some(frame);
         }
@@ -179,7 +187,7 @@ impl Browser {
                     return;
                 };
                 if let Some(url) = this.address.on_key(key) {
-                    load_page(&url);
+                    this.navigate(Step::Open(url));
                 }
             }));
         let text = self.address.shown().to_string();
@@ -250,6 +258,50 @@ impl Browser {
         }
         page
     }
+
+    fn on_shortcut(&mut self, shortcut: Shortcut, window: &mut Window) {
+        match shortcut {
+            Shortcut::Back => self.navigate(Step::Back),
+            Shortcut::Forward => self.navigate(Step::Forward),
+            Shortcut::Reload => self.navigate(Step::Reload),
+            Shortcut::FocusAddress => {
+                self.address.focus_from_shortcut();
+                window.focus(&self.bar_focus);
+            }
+        }
+    }
+
+    fn navigate(&mut self, step: Step) {
+        let Some(url) = self.nav.target(&step) else {
+            return;
+        };
+        let Some(generation) = load_page(&url) else {
+            return;
+        };
+        self.nav.begin(step, generation);
+        if let Some(current) = self.nav.current() {
+            self.address.note_current(current);
+        }
+    }
+
+    fn apply_nav(&mut self) {
+        for event in take_nav() {
+            match event {
+                NavEvent::Succeeded { generation } => {
+                    self.nav.succeed(generation);
+                }
+                NavEvent::Failed { generation } => {
+                    self.nav.fail(generation);
+                }
+                NavEvent::PageOpened { generation, url } => {
+                    self.nav.begin(Step::Open(url), generation);
+                    if let Some(current) = self.nav.current() {
+                        self.address.note_current(current);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Drop for Browser {
@@ -268,6 +320,16 @@ impl Render for Browser {
             .flex_col()
             .size_full()
             .bg(rgb(0xffffff))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.is_held {
+                    return;
+                }
+                let Some(shortcut) = keys::shortcut(&event.keystroke) else {
+                    return;
+                };
+                this.on_shortcut(shortcut, window);
+                cx.stop_propagation();
+            }))
             .child(bar)
             .child(page)
     }
@@ -295,12 +357,21 @@ fn poll_page() -> Option<CpuFrame> {
     PAGE.with(|slot| slot.borrow_mut().as_mut().and_then(Page::poll))
 }
 
-fn load_page(url: &str) {
+fn installed_generation() -> Option<u64> {
+    PAGE.with(|slot| slot.borrow().as_ref().map(Page::generation))
+}
+
+fn load_page(url: &str) -> Option<u64> {
+    PAGE.with(|slot| slot.borrow_mut().as_mut().and_then(|page| page.load(url)))
+}
+
+fn take_nav() -> Vec<NavEvent> {
     PAGE.with(|slot| {
-        if let Some(page) = slot.borrow_mut().as_mut() {
-            page.load(url);
-        }
-    });
+        slot.borrow_mut()
+            .as_mut()
+            .map(Page::take_nav)
+            .unwrap_or_default()
+    })
 }
 
 fn click_page(click: PageClick, down: bool, click_count: usize) {

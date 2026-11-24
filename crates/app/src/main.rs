@@ -1,7 +1,9 @@
 mod address;
 mod click;
+mod keys;
 mod launch;
 mod metrics;
+mod nav;
 mod present;
 mod scroll;
 mod text;
