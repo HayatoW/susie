@@ -1,6 +1,6 @@
 //! アドレスバーの文字列。
 //! 入力欄は 1 つで、 URL を打って Enter で開く。
-//! 検索、補完、履歴は持たない。フォーカスを移すショートカットも持たない。
+//! 検索、補完、履歴は持たない。フォーカスを移すキーは、この欄の外で割り当てる。
 
 use gpui::Keystroke;
 
@@ -52,6 +52,18 @@ impl Address {
         self.focused = true;
         self.replace = true;
         self.shown = self.opened.clone();
+    }
+
+    /// 移動で、開いている URL が変わった。
+    /// 入力中の下書きは残す。選択中なら、開いている URL を選び直す。
+    pub fn note_current(&mut self, url: &str) {
+        if self.opened == url {
+            return;
+        }
+        self.opened = url.to_string();
+        if !self.focused || self.replace {
+            self.shown = self.opened.clone();
+        }
     }
 
     /// ページをクリックした。書きかけは捨てて、開いている URL に戻す。
@@ -217,6 +229,31 @@ mod tests {
         assert!(address.on_key(AddressKey::Enter).is_none());
         assert_eq!(address.shown(), "susie");
         assert_eq!(address.opened, "file:///tmp/frompage.html");
+    }
+
+    #[test]
+    fn navigation_updates_the_opened_url_unless_a_draft_is_in_progress() {
+        let mut address = address();
+        address.note_current("file:///tmp/next.html");
+        assert_eq!(address.shown(), "file:///tmp/next.html");
+        assert_eq!(address.opened, "file:///tmp/next.html");
+
+        address.focus_from_click();
+        address.on_key(AddressKey::Text("https://example.com".to_string()));
+        address.note_current("file:///tmp/other.html");
+        assert_eq!(address.shown(), "https://example.com");
+        assert_eq!(address.opened, "file:///tmp/other.html");
+        address.blur_to_page();
+        assert_eq!(address.shown(), "file:///tmp/other.html");
+    }
+
+    #[test]
+    fn navigation_replaces_a_fresh_selection() {
+        let mut address = address();
+        address.focus_from_click();
+        address.note_current("file:///tmp/next.html");
+        assert!(address.replaces());
+        assert_eq!(address.shown(), "file:///tmp/next.html");
     }
 
     #[test]
