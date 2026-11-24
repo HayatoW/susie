@@ -230,14 +230,26 @@ impl Page {
 
     /// 今のページを、この URL へ移す。戻した番号が、この読み込みの番号。
     /// ブラウザがまだ無いときは None で、読み込みは始まらない。
-    /// 描画はここでは止めない。同じ文書内の移動や、読み込みが始まる前に拒否された URL は、完了の通知が来ない。
+    /// 描画はここでは止めない。フラグメントだけの移動は、ここで成功にする。CEF は開始も終了も送らない。
     pub fn load(&mut self, url: &str) -> Option<u64> {
         let browser = self.state.browser.borrow().clone()?;
         let frame = browser.main_frame()?;
-        let generation = self.state.loads.borrow_mut().request();
+        let current = CefString::from(&frame.url()).to_string();
+        let fragment = Loads::is_fragment_move(&current, url);
+        let generation = if fragment {
+            self.state.loads.borrow_mut().fragment_move()
+        } else {
+            self.state.loads.borrow_mut().request()
+        };
         *self.state.url.borrow_mut() = url.to_string();
         let target = CefString::from(url);
         frame.load_url(Some(&target));
+        if fragment {
+            self.state
+                .nav_events
+                .borrow_mut()
+                .push(NavEvent::Succeeded { generation });
+        }
         Some(generation)
     }
 
@@ -400,17 +412,30 @@ fn key_event(type_: KeyEventType, windows_key_code: i32, character: u16) -> KeyE
 }
 
 fn note_main_load(state: &State, notice: LoadNotice, url: Option<String>) {
-    let effect = state.loads.borrow_mut().notice(notice);
-    let event = match effect {
-        crate::load::LoadEffect::None => return,
-        crate::load::LoadEffect::PageOpened { generation } => NavEvent::PageOpened {
-            generation,
-            url: url.unwrap_or_default(),
-        },
-        crate::load::LoadEffect::Succeeded { generation } => NavEvent::Succeeded { generation },
-        crate::load::LoadEffect::Failed { generation } => NavEvent::Failed { generation },
-    };
-    state.nav_events.borrow_mut().push(event);
+    let effect = state.loads.borrow_mut().notice(notice, url.as_deref());
+    let mut events = state.nav_events.borrow_mut();
+    match effect {
+        crate::load::LoadEffect::None => {}
+        crate::load::LoadEffect::PageOpened { generation } => {
+            events.push(NavEvent::PageOpened {
+                generation,
+                url: url.unwrap_or_default(),
+            });
+        }
+        crate::load::LoadEffect::Succeeded { generation } => {
+            events.push(NavEvent::Succeeded { generation });
+        }
+        crate::load::LoadEffect::Failed { generation } => {
+            events.push(NavEvent::Failed { generation });
+        }
+        crate::load::LoadEffect::FailedOpen { generation } => {
+            let Some(url) = url.filter(|url| !url.is_empty()) else {
+                return;
+            };
+            events.push(NavEvent::PageOpened { generation, url });
+            events.push(NavEvent::Failed { generation });
+        }
+    }
 }
 
 fn close_browser(state: &State) {

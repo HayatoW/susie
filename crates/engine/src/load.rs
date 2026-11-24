@@ -27,9 +27,19 @@ pub(crate) enum LoadNotice {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LoadEffect {
     None,
-    PageOpened { generation: u64 },
-    Succeeded { generation: u64 },
-    Failed { generation: u64 },
+    PageOpened {
+        generation: u64,
+    },
+    Succeeded {
+        generation: u64,
+    },
+    Failed {
+        generation: u64,
+    },
+    /// ページが開いた直後、文書が確定する前に失敗した。開くと失敗をこの順で渡す。
+    FailedOpen {
+        generation: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -65,10 +75,28 @@ impl Loads {
         self.issued
     }
 
-    pub(crate) fn notice(&mut self, notice: LoadNotice) -> LoadEffect {
+    /// フラグメントだけが違う URL か。CEF はこの移動で開始も終了も送らない。
+    pub(crate) fn is_fragment_move(current: &str, next: &str) -> bool {
+        let current_base = current
+            .split_once('#')
+            .map(|(base, _)| base)
+            .unwrap_or(current);
+        let next_base = next.split_once('#').map(|(base, _)| base).unwrap_or(next);
+        current_base == next_base && current != next
+    }
+
+    /// フラグメントだけの移動。要求を残さない。次の開始をこの番号が受け取らない。
+    pub(crate) fn fragment_move(&mut self) -> u64 {
+        let id = self.next;
+        self.next += 1;
+        self.issued = id;
+        id
+    }
+
+    pub(crate) fn notice(&mut self, notice: LoadNotice, url: Option<&str>) -> LoadEffect {
         match notice {
             LoadNotice::Start => self.on_start(),
-            LoadNotice::Error { aborted } => self.on_error(aborted),
+            LoadNotice::Error { aborted } => self.on_error(aborted, url),
             LoadNotice::End => self.on_end(),
         }
     }
@@ -90,7 +118,7 @@ impl Loads {
         LoadEffect::PageOpened { generation: id }
     }
 
-    fn on_error(&mut self, aborted: bool) -> LoadEffect {
+    fn on_error(&mut self, aborted: bool, url: Option<&str>) -> LoadEffect {
         if aborted {
             return LoadEffect::None;
         }
@@ -99,8 +127,14 @@ impl Loads {
         } else if let Some(id) = self.requested.take() {
             self.started = Some(id);
             id
-        } else {
+        } else if self.failed.is_some() || url.is_none_or(|url| url.is_empty()) {
             return LoadEffect::None;
+        } else {
+            let id = self.next;
+            self.next += 1;
+            self.issued = id;
+            self.failed = Some(id);
+            return LoadEffect::FailedOpen { generation: id };
         };
         if self.failed == Some(id) {
             return LoadEffect::None;
@@ -129,43 +163,43 @@ mod tests {
     fn requested_start_and_end_succeed_once() {
         let mut loads = Loads::new();
         let id = loads.request();
-        assert_eq!(loads.notice(LoadNotice::Start), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::Start, None), LoadEffect::None);
         assert_eq!(
-            loads.notice(LoadNotice::End),
+            loads.notice(LoadNotice::End, None),
             LoadEffect::Succeeded { generation: id }
         );
-        assert_eq!(loads.notice(LoadNotice::End), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::End, None), LoadEffect::None);
     }
 
     #[test]
     fn error_then_end_fails_once() {
         let mut loads = Loads::new();
         let id = loads.request();
-        assert_eq!(loads.notice(LoadNotice::Start), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::Start, None), LoadEffect::None);
         assert_eq!(
-            loads.notice(LoadNotice::Error { aborted: false }),
+            loads.notice(LoadNotice::Error { aborted: false }, None),
             LoadEffect::Failed { generation: id }
         );
         assert_eq!(
-            loads.notice(LoadNotice::Error { aborted: false }),
+            loads.notice(LoadNotice::Error { aborted: false }, None),
             LoadEffect::None
         );
-        assert_eq!(loads.notice(LoadNotice::End), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::End, None), LoadEffect::None);
     }
 
     #[test]
     fn aborted_load_is_not_a_result() {
         let mut loads = Loads::new();
         let first = loads.request();
-        assert_eq!(loads.notice(LoadNotice::Start), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::Start, None), LoadEffect::None);
         let second = loads.request();
         assert_eq!(
-            loads.notice(LoadNotice::Error { aborted: true }),
+            loads.notice(LoadNotice::Error { aborted: true }, None),
             LoadEffect::None
         );
-        assert_eq!(loads.notice(LoadNotice::Start), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::Start, None), LoadEffect::None);
         assert_eq!(
-            loads.notice(LoadNotice::End),
+            loads.notice(LoadNotice::End, None),
             LoadEffect::Succeeded { generation: second }
         );
         assert_ne!(first, second);
@@ -176,28 +210,28 @@ mod tests {
         let mut loads = Loads::new();
         let id = loads.request();
         assert_eq!(
-            loads.notice(LoadNotice::Error { aborted: false }),
+            loads.notice(LoadNotice::Error { aborted: false }, None),
             LoadEffect::Failed { generation: id }
         );
-        assert_eq!(loads.notice(LoadNotice::End), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::End, None), LoadEffect::None);
     }
 
     #[test]
     fn unrequested_start_is_a_page_open() {
         let mut loads = Loads::new();
         let first = loads.request();
-        assert_eq!(loads.notice(LoadNotice::Start), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::Start, None), LoadEffect::None);
         assert_eq!(
-            loads.notice(LoadNotice::End),
+            loads.notice(LoadNotice::End, None),
             LoadEffect::Succeeded { generation: first }
         );
-        let effect = loads.notice(LoadNotice::Start);
+        let effect = loads.notice(LoadNotice::Start, None);
         let LoadEffect::PageOpened { generation } = effect else {
             panic!("page open was {effect:?}");
         };
         assert_ne!(generation, first);
         assert_eq!(
-            loads.notice(LoadNotice::End),
+            loads.notice(LoadNotice::End, None),
             LoadEffect::Succeeded { generation }
         );
     }
@@ -206,7 +240,59 @@ mod tests {
     fn second_start_of_the_same_load_is_not_another_open() {
         let mut loads = Loads::new();
         loads.request();
-        assert_eq!(loads.notice(LoadNotice::Start), LoadEffect::None);
-        assert_eq!(loads.notice(LoadNotice::Start), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::Start, None), LoadEffect::None);
+        assert_eq!(loads.notice(LoadNotice::Start, None), LoadEffect::None);
+    }
+
+    #[test]
+    fn fragment_move_leaves_the_next_start_as_a_page_open() {
+        let mut loads = Loads::new();
+        let fragment = loads.fragment_move();
+        assert!(Loads::is_fragment_move(
+            "file:///tmp/a.html",
+            "file:///tmp/a.html#mark"
+        ));
+        assert!(!Loads::is_fragment_move(
+            "file:///tmp/a.html",
+            "file:///tmp/a.html"
+        ));
+        assert!(!Loads::is_fragment_move(
+            "file:///tmp/a.html",
+            "file:///tmp/b.html"
+        ));
+        let effect = loads.notice(LoadNotice::Start, None);
+        let LoadEffect::PageOpened { generation } = effect else {
+            panic!("page open was {effect:?}");
+        };
+        assert_ne!(generation, fragment);
+    }
+
+    #[test]
+    fn error_without_start_opens_the_failed_url() {
+        let mut loads = Loads::new();
+        assert_eq!(
+            loads.notice(LoadNotice::Error { aborted: false }, None),
+            LoadEffect::None
+        );
+        let effect = loads.notice(
+            LoadNotice::Error { aborted: false },
+            Some("https://down.example/"),
+        );
+        let LoadEffect::FailedOpen { generation } = effect else {
+            panic!("failed open was {effect:?}");
+        };
+        assert_eq!(
+            loads.notice(
+                LoadNotice::Error { aborted: false },
+                Some("https://down.example/"),
+            ),
+            LoadEffect::None
+        );
+        assert_eq!(loads.notice(LoadNotice::End, None), LoadEffect::None);
+        let effect = loads.notice(LoadNotice::Start, None);
+        let LoadEffect::PageOpened { generation: next } = effect else {
+            panic!("page open was {effect:?}");
+        };
+        assert_ne!(next, generation);
     }
 }
