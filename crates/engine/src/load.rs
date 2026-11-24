@@ -1,5 +1,3 @@
-//! 読み込みの番号。
-//! 今の番号の結果だけを成功か失敗にする。違う番号の結果は捨てる。
 //! 中止 (ERR_ABORTED) は、捨てた読み込みの通知なので、成功にも失敗にもしない。
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,7 +60,6 @@ impl Loads {
         }
     }
 
-    /// こちらから読み込みを頼んだ番号。 on_load_start がこの番号を引き取る。
     pub(crate) fn request(&mut self) -> u64 {
         let id = self.next;
         self.next += 1;

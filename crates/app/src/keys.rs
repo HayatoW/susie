@@ -1,6 +1,4 @@
-//! ブラウザのキー。 Hayato が割り当てた。
 //! Alt+← で戻る。 Alt+→ で進む。 Ctrl+R で再読み込み。 Ctrl+L でアドレス欄へ移る。
-//! Vim 風のキーは、地図の 8 番まで入れない。
 
 use gpui::Keystroke;
 

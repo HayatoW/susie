@@ -51,7 +51,6 @@ fn keys_go_back_forward_and_reload() {
     thread::sleep(Duration::from_millis(300));
     sway.focus_window(app.pid());
 
-    // 戻れない。印が残るので、読み直しではない。
     keyboard.alt_left();
     wait_until(
         &sway,
@@ -93,7 +92,6 @@ fn keys_go_back_forward_and_reload() {
         "the stamped elm page",
         |text| text.contains("susie-stamped") && text.contains("fromelm"),
     );
-    // 進めない。印が残る。
     sway.focus_window(app.pid());
     thread::sleep(Duration::from_millis(200));
     keyboard.alt_right();
@@ -168,7 +166,6 @@ fn keys_go_back_forward_and_reload() {
     );
     let reloaded = hold_mark(origin);
 
-    // 欄をクリックしたときと同じく、開いている URL を選択してから打つと置き換わる。
     sway.focus_window(app.pid());
     keyboard.ctrl_l();
     thread::sleep(Duration::from_millis(300));
@@ -210,7 +207,6 @@ fn keys_go_back_forward_and_reload() {
     close_cleanly(&sway, &mut app);
 }
 
-/// 選択された URL が、打った文字に置き換わっている。ページは elm のまま。
 fn replaced_the_url(text: &str) -> bool {
     text.contains("susie-elm")
         && text.contains('q')

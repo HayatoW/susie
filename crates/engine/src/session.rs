@@ -253,7 +253,6 @@ impl Page {
         Some(generation)
     }
 
-    /// 起動時の読み込みに付けた番号。
     pub fn generation(&self) -> u64 {
         self.state.loads.borrow().issued()
     }

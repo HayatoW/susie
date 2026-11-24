@@ -271,7 +271,6 @@ impl Browser {
         }
     }
 
-    /// 受け付ける移動だけ、履歴を変えてからその URL を読む。
     fn navigate(&mut self, step: Step) {
         let Some(url) = self.nav.target(&step) else {
             return;
