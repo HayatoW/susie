@@ -265,7 +265,7 @@ impl Browser {
             Shortcut::Forward => self.navigate(Step::Forward),
             Shortcut::Reload => self.navigate(Step::Reload),
             Shortcut::FocusAddress => {
-                self.address.focus_from_click();
+                self.address.focus_from_shortcut();
                 window.focus(&self.bar_focus);
             }
         }
